@@ -1,0 +1,17 @@
+#テスト用のデータ作成
+
+import openpyxl
+
+wb = openpyxl.Workbook()
+ws= wb.active
+
+ws.cell(row=1,column=1).value = 'No.'
+ws.freeze_panes = 'A3'
+
+for i in range(2, 1001):
+    ws.cell(row=i,column=1).value = 0
+
+for i in range(2, 1001, 2):
+    ws.cell(row=i,column=1).value = 1
+
+wb.save('Sample.xlsx')
