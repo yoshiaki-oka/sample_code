@@ -1,0 +1,128 @@
+開発工程の詳細に基づいて、以下のようにPythonスクリプトを作成します。
+Google Colabでの実行を前提とし、ファイルの読み込み、データの集計、メールの作成・送信、在庫情報の更新を行います。
+
+Step 1: Google Colabのセットアップ
+Google Colabで新規ファイルを作成し、以下のコードを実行します。ファイルの読み書きが必要なため、Colabのファイルシステムを使います。
+python
+from google.colab import drive
+drive.mount('/content/drive')
+
+
+Step 2: 必要なライブラリのインストール
+必要なライブラリをインストールします。
+python
+!pip install openpyxl
+!pip install pandas
+!pip install smtplib
+
+
+Step 3: 各店から届く注文情報をまとめる
+python
+import pandas as pd
+import glob
+# ファイルパスの設定
+order_files = glob.glob('/content/drive/MyDrive/samples/order_new/order_*_20230524.xlsx')
+
+# 各注文ファイルを読み込み、合計注文数を計算
+order_data = pd.DataFrame()
+
+for file in order_files:
+    df = pd.read_excel(file)
+    order_data = pd.concat([order_data, df])
+
+# 各野菜の合計注文数を計算
+order_summary = order_data.groupby('野菜名')['注文数'].sum().reset_index()
+order_summary.columns = ['野菜名', '合計注文数']
+
+print(order_summary)
+
+
+Step 4: 現在の在庫状況を確認する
+python
+# 在庫情報の読み込み
+inventory_file = '/content/drive/MyDrive/samples/inventory.xlsx'
+inventory_data = pd.read_excel(inventory_file)
+
+# 最新の在庫情報を抽出
+latest_inventory = inventory_data.iloc[-1]
+
+print(latest_inventory)
+
+
+Step 5: 発注が必要なアイテムを特定する
+python
+# 発注しきい値と発注数の確認
+pickup_file = '/content/drive/MyDrive/samples/pickup.xlsx'
+pickup_data = pd.read_excel(pickup_file)
+
+# 在庫の最新情報と合計注文数を元に不足しているアイテムを特定
+order_summary = order_summary.set_index('野菜名')
+latest_inventory = latest_inventory.set_index('野菜名')
+
+needed_orders = latest_inventory['在庫数'] - order_summary['合計注文数']
+needed_orders = needed_orders.to_frame('不足数')
+
+# 発注が必要なアイテムをしきい値と比較して特定
+for index, row in pickup_data.iterrows():
+    vegetable = row['野菜名']
+    threshold = row['しきい値']
+    order_amount = row['発注数']
+
+    if needed_orders.loc[vegetable, '不足数'] < threshold:
+        needed_orders.loc[vegetable, '発注数'] = order_amount
+
+needed_orders = needed_orders.dropna(subset=['発注数'])
+print(needed_orders)
+
+
+Step 6: 発注のためのメール文を作成し、送信する
+python
+import smtplib
+from email.mime.text import MIMEText
+
+def send_order_email(order_details):
+    sender = 'your_email@gmail.com'
+    recipient = 'farmer@example.com'
+    subject = '発注依頼'
+    body = '以下の商品の発注をお願いします。\n\n'
+    
+    for vegetable, details in order_details.iterrows():
+        body += f"{vegetable}: {details['発注数']}個\n"
+    
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = sender
+    msg['To'] = recipient
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        server.login(sender, 'your_app_password')
+        server.sendmail(sender, recipient, msg.as_string())
+
+# 発注メールの送信
+send_order_email(needed_orders)
+
+
+Step 7: 在庫状況を最新の情報に更新する
+python
+# 最新の在庫情報を更新
+new_inventory = latest_inventory['在庫数'] - order_summary['合計注文数']
+
+# 更新後の在庫を新たに追加
+new_inventory_data = inventory_data.append(new_inventory, ignore_index=True)
+
+# ファイルの保存
+new_inventory_data.to_excel('/content/drive/MyDrive/samples/inventory.xlsx', index=False)
+
+
+Step 8: スクリプトの定期実行の仕組みを作る
+Google Colabのスクリプトの定期実行は手動設定が必要ですが、UI. Vision RPAやタスクスケジューラを用いた設定が必要です。詳細な手順は以下の通りです。
+
+MacのカレンダーアプリとUI. Vision RPA
+    カレンダーアプリで新規イベントを作成し、定期的な実行時間を設定します。
+    イベントの通知設定を「スクリプトの実行」に変更し、Google Colabでスクリプトを実行するためのリンクを指定します。
+
+WindowsのタスクスケジューラとUI. Vision RPA
+    タスクスケジューラで新規タスクを作成し、トリガーを定期的な実行に設定します。
+    アクションとして、ブラウザを開きGoogle Colabのスクリプトを実行するためのリンクを指定します。
+
+これにより、開発したPythonスクリプトが定期的に実行されるようになります。
