@@ -1,0 +1,73 @@
+import glob
+import pandas as pd
+
+# 野菜リスト
+vegetables = ["トマト", "キャベツ", "レタス", "白菜", "ほうれん草", "大根", "ニンジン"]
+
+# 注文数の集計用Seriesを作成
+orders_sum = pd.Series(0, index=vegetables)
+
+# Excelファイルから注文数を集計
+order_files = glob.glob("order_*_20230524.xlsx")
+for file in order_files:
+    df = pd.read_excel(file, header=None)
+    for veg in vegetables:
+        if veg in df.iloc[0].values:
+            orders_sum[veg] += df.iloc[1, df.iloc[0].values == veg].values[0]
+print(orders_sum)
+
+# inventory.xlsxを読み込み
+inventory = pd.read_excel("inventory.xlsx")
+
+# 最終行の在庫数を取得
+latest_inventory = inventory.iloc[-1][vegetables].astype(int)
+print(latest_inventory)
+
+# 計算後の在庫数を算出
+calculated_inventory = latest_inventory - orders_sum
+print(calculated_inventory)
+
+# pickup.xlsxを読み込み
+pickup = pd.read_excel("pickup.xlsx", header=0, index_col=0)
+thresholds = pickup.loc['しきい値'].astype(int)
+addition_amounts = pickup.loc['追加量'].astype(int)
+
+# 在庫数がしきい値以下の野菜があるか確認し、発注が必要な野菜とその量を表示
+order_needed = calculated_inventory < thresholds
+additional_orders = addition_amounts.where(order_needed, other=0)
+print(additional_orders[additional_orders > 0])
+
+# 発注が必要な野菜がない場合
+if additional_orders[additional_orders > 0].empty:
+    print("\n発注が必要な野菜はありません")
+
+
+トマト      31
+キャベツ     21
+レタス      42
+白菜       25
+ほうれん草    23
+大根       15
+ニンジン     32
+dtype: int64
+
+トマト       91
+キャベツ      73
+レタス      103
+白菜        84
+ほうれん草     75
+大根        48
+ニンジン      50
+Name: 13, dtype: int64
+
+トマト      60
+キャベツ     52
+レタス      61
+白菜       59
+ほうれん草    52
+大根       33
+ニンジン     18
+dtype: int64
+
+ニンジン    80
+Name: 追加量, dtype: int64
