@@ -1,0 +1,95 @@
+# step 3～6
+
+import pandas as pd
+import glob
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+# 野菜リスト
+vegetables = ["トマト", "キャベツ", "レタス", "白菜", "ほうれん草", "大根", "ニンジン"]
+
+# 注文数の集計用Seriesを作成
+orders_sum = pd.Series(0, index=vegetables)
+
+# Excelファイルから注文数を集計
+order_files = glob.glob("order_*_20230524.xlsx")
+for file in order_files:
+    df = pd.read_excel(file, header=None)
+    for veg in vegetables:
+        if veg in df.iloc[0].values:
+            orders_sum[veg] += df.iloc[1, df.iloc[0].values == veg].values[0]
+print("集計した注文数:")
+print(orders_sum)
+
+# inventory.xlsxを読み込み
+inventory = pd.read_excel("inventory.xlsx")
+
+# 最終行の在庫数を取得
+latest_inventory = inventory.iloc[-1][vegetables].astype(int)
+print("最新の在庫数:")
+print(latest_inventory)
+
+# 計算後の在庫数を算出
+calculated_inventory = latest_inventory - orders_sum
+print("計算後の在庫数:")
+print(calculated_inventory)
+
+# pickup.xlsxを読み込み
+pickup = pd.read_excel("pickup.xlsx", header=0, index_col=0)
+thresholds = pickup.loc['しきい値'].astype(int)
+addition_amounts = pickup.loc['追加量'].astype(int)
+
+# 在庫数がしきい値以下の野菜があるか確認し、発注が必要な野菜とその量を表示
+order_needed = calculated_inventory < thresholds
+additional_orders = addition_amounts.where(order_needed, other=0)
+
+print("発注が必要な野菜とその量:")
+print(additional_orders[additional_orders > 0])
+
+# 発注が必要な野菜がない場合
+if additional_orders[additional_orders > 0].empty:
+    print("\n発注が必要な野菜はありません")
+else:
+    print("\n発注が必要な野菜があります")
+
+    # 発注メールの作成
+    def create_order_email(order_list):
+        subject = "野菜の発注"
+        body = "以下の野菜が在庫不足のため、追加発注が必要です。\n\n"
+        for veg, qty in order_list.items():
+            body += f"{veg}: {qty}個\n"
+        return subject, body
+
+    # メール送信の設定
+    def send_email(subject, body, to_email, from_email, smtp_server, smtp_port, smtp_user, smtp_password):
+        msg = MIMEMultipart()
+        msg['From'] = from_email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        text = msg.as_string()
+        server.sendmail(from_email, to_email, text)
+        server.quit()
+
+    # 発注が必要な野菜とその量を取得
+    additional_orders_needed = additional_orders[additional_orders > 0].to_dict()
+
+    # メールの送信
+    if additional_orders_needed:
+        subject, body = create_order_email(additional_orders_needed)
+        send_email(
+            subject,
+            body,
+            to_email='manufacturer@example.com',  # 送信先のメールアドレスを指定
+            from_email='your_email@gmail.com',    # 送信元のメールアドレスを指定
+            smtp_server='smtp.gmail.com',
+            smtp_port=587,
+            smtp_user='your_email@gmail.com',     # Gmailのメールアドレス
+            smtp_password='your_app_password'     # Gmailのアプリパスワード
+        )
+        print("\nメールを送信しました")
