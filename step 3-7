@@ -1,0 +1,158 @@
+step 3-7
+
+!pip install pandas openpyxl
+
+import pandas as pd
+import glob
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from datetime import datetime
+import calendar
+
+# 野菜リスト
+vegetables = ["トマト", "キャベツ", "レタス", "白菜", "ほうれん草", "大根", "ニンジン"]
+
+# 注文数の集計用Seriesを作成
+orders_sum = pd.Series(0, index=vegetables)
+
+# Excelファイルから注文数を集計
+order_files = glob.glob('/content/samples/order_new/order_*_20230524.xlsx')
+for file in order_files:
+    df = pd.read_excel(file, header=None)
+    for veg in vegetables:
+        if veg in df.iloc[0].values:
+            orders_sum[veg] += df.iloc[1, df.iloc[0].values == veg].values[0]
+print("集計した注文数:")
+print(orders_sum)
+
+# inventory.xlsxを読み込み
+inventory = pd.read_excel('/content/samples/inventory.xlsx')
+
+# 最終行の在庫数を取得
+latest_inventory = inventory.iloc[-1][vegetables].astype(int)
+print("最新の在庫数:")
+print(latest_inventory)
+
+# 計算後の在庫数を算出
+calculated_inventory = latest_inventory - orders_sum
+print("計算後の在庫数:")
+print(calculated_inventory)
+
+# pickup.xlsxを読み込み
+pickup = pd.read_excel('/content/samples/pickup.xlsx', header=0, index_col=0)
+thresholds = pickup.loc['しきい値'].astype(int)
+addition_amounts = pickup.loc['追加量'].astype(int)
+
+# 在庫数がしきい値以下の野菜があるか確認し、発注が必要な野菜とその量を表示
+order_needed = calculated_inventory < thresholds
+additional_orders = addition_amounts.where(order_needed, other=0)
+
+print("発注が必要な野菜とその量:")
+print(additional_orders[additional_orders > 0])
+
+# 発注が必要な野菜がない場合
+if additional_orders[additional_orders > 0].empty:
+    print("\n発注が必要な野菜はありません")
+else:
+    print("\n発注が必要な野菜があります")
+
+    # 発注メールの作成
+    def create_order_email(order_list):
+        subject = "野菜の発注"
+        body = "以下の野菜が在庫不足のため、発注します。\n\n"
+        for veg, qty in order_list.items():
+            body += f"{veg}: {qty}個\n"
+        return subject, body
+
+    # メール送信の設定
+    def send_email(subject, body, to_email, from_email, smtp_server, smtp_port, smtp_user, smtp_password):
+        msg = MIMEMultipart()
+        msg['From'] = from_email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        text = msg.as_string()
+        server.sendmail(from_email, to_email, text)
+        server.quit()
+
+    # 発注が必要な野菜とその量を取得
+    additional_orders_needed = additional_orders[additional_orders > 0].to_dict()
+
+    # メールの送信
+    if additional_orders_needed:
+        subject, body = create_order_email(additional_orders_needed)
+        send_email(
+            subject,
+            body,
+            to_email='@gmail.com',      # 送信先のメールアドレスを指定
+            from_email='@gmail.com',    # 送信元のメールアドレスを指定
+            smtp_server='smtp.gmail.com',
+            smtp_port=587,
+            smtp_user='@gmail.com',    # Gmailのメールアドレス
+            smtp_password=''           # Gmailのアプリパスワード
+        )
+        print("\nメールを送信しました")
+
+# order_A_20230524から日付を抽出し、変換
+date_str = order_files[0].split('_')[-1].split('.')[0]      # "20230524"
+order_date = datetime.strptime(date_str, "%Y%m%d")
+order_date_str = order_date.strftime("%Y-%m-%d %H:%M:%S")   # "2023-05-24 0:00:00"
+order_day = calendar.day_abbr[order_date.weekday()]         # "Wed"
+
+# 計算後の在庫数を新しい行に追加
+new_row = pd.DataFrame([[order_date_str, order_day] + calculated_inventory.tolist()],
+                       columns=['日付', '曜日'] + vegetables)
+inventory = pd.concat([inventory, new_row], ignore_index=True)
+inventory.to_excel('/content/samples/inventory.xlsx', index=False)
+print("\n計算後の在庫数でinventory.xlsxを保存")
+
+
+Requirement already satisfied: pandas in /usr/local/lib/python3.10/dist-packages (2.0.3)
+Requirement already satisfied: openpyxl in /usr/local/lib/python3.10/dist-packages (3.1.3)
+Requirement already satisfied: python-dateutil>=2.8.2 in /usr/local/lib/python3.10/dist-packages (from pandas) (2.8.2)
+Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.10/dist-packages (from pandas) (2023.4)
+Requirement already satisfied: tzdata>=2022.1 in /usr/local/lib/python3.10/dist-packages (from pandas) (2024.1)
+Requirement already satisfied: numpy>=1.21.0 in /usr/local/lib/python3.10/dist-packages (from pandas) (1.25.2)
+Requirement already satisfied: et-xmlfile in /usr/local/lib/python3.10/dist-packages (from openpyxl) (1.1.0)
+Requirement already satisfied: six>=1.5 in /usr/local/lib/python3.10/dist-packages (from python-dateutil>=2.8.2->pandas) (1.16.0)
+集計した注文数:
+トマト      31
+キャベツ     21
+レタス      42
+白菜       25
+ほうれん草    23
+大根       15
+ニンジン     32
+dtype: int64
+最新の在庫数:
+トマト       91
+キャベツ      73
+レタス      103
+白菜        84
+ほうれん草     75
+大根        48
+ニンジン      50
+Name: 13, dtype: int64
+計算後の在庫数:
+トマト      60
+キャベツ     52
+レタス      61
+白菜       59
+ほうれん草    52
+大根       33
+ニンジン     18
+dtype: int64
+発注が必要な野菜とその量:
+ニンジン    80
+Name: 追加量, dtype: int64
+
+発注が必要な野菜があります
+
+メールを送信しました
+
+計算後の在庫数でinventory.xlsxを保存
