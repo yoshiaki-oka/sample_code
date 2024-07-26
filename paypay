@@ -1,0 +1,135 @@
+
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import webbrowser
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment, PatternFill
+from datetime import datetime
+import os
+
+# Constants
+TEMP_FILE = os.path.join(os.path.expanduser("~"), 'Downloads', 'paypay.xlsx')
+
+def preprocess_dataframe(df):
+    df = df.copy()  #SettingWithCopyWarning
+    columns = df.columns.tolist()
+    columns.insert(10, columns.pop(7))  #摘要
+    df = df[columns]
+
+    df['日付'] = (df['操作日(年)'].astype(str) + '/' +
+                df['操作日(月)'].astype(str).str.zfill(2) + '/' +
+                df['操作日(日)'].astype(str).str.zfill(2) + ' ' +
+                df['操作時刻(時)'].astype(str).str.zfill(2) + ':' +
+                df['操作時刻(分)'].astype(str).str.zfill(2) + ':' +
+                df['操作時刻(秒)'].astype(str).str.zfill(2))
+
+    return df
+
+def process_csv_file(file_path):
+    df = pd.read_csv(file_path, encoding='shift-jis')
+    df = preprocess_dataframe(df)
+    output_df = df[['日付', '取引順番号', 'お支払金額', 'お預り金額', '残高', '摘要', 'メモ']]
+    output_df.to_excel(TEMP_FILE, index=False, header=True)
+    return output_df
+
+def format_excel_sheet(ws):
+    ws.insert_cols(7)
+    ws['G1'] = '明細番号'
+
+    for cell in ws[1]:
+        cell.style = 'Normal'
+        cell.alignment = Alignment(horizontal='center')
+
+    for col in ['A']:
+        for cell in ws[col]:
+            cell.number_format = 'yyyy/mm/dd'
+    for col in ['C', 'D', 'E']:
+        for cell in ws[col]:
+            cell.number_format = '#,##0'
+
+    column_widths = {'A': 11, 'B': 11, 'C': 11, 'D': 11, 'E': 11, 'F': 20, 'G': 11, 'H': 20}
+    for col, width in column_widths.items():
+        ws.column_dimensions[col].width = width
+
+    ws.freeze_panes = 'A2'
+
+#Ｆ列摘要の値で、Ｈ列メモへ代入　※match python 3.10～
+def process_transaction_cell(ws, cell, data, previous_month):
+    match data:
+        case "ＰＡＹＰＡＹ":
+            ws.cell(row=cell.row, column=8).value = "PayPay"
+        case "ＡＴＭ手数料":
+            ws.cell(row=cell.row, column=8).value = "ATM手数料"
+        case "振込手数料":
+            ws.cell(row=cell.row, column=8).value = "振込手数料"
+        case _ if "ATM出金" in data:
+            ws.cell(row=cell.row, column=8).value = "ATM出金"
+        case _ if "ATM入金" in data:
+            ws.cell(row=cell.row, column=8).value = "ATM入金"
+        case _ if "利息" in data:
+            ws.cell(row=cell.row, column=8).value = "利息"
+        case _ if "給与振込" in data:
+            ws.cell(row=cell.row, column=8).value = "給与振込"
+        case _ if data.startswith('ＡＰ（'):
+            ws.cell(row=cell.row, column=8).value = f"携帯電話代 {previous_month}月分"
+        case _ if data.startswith('Vデビット'):
+            process_vdebit_transaction(ws, cell, data)
+
+def process_vdebit_transaction(ws, cell, data):
+    #Ｆ列の右から８桁をＧ列へ代入
+    ws.cell(row=cell.row, column=7).value = data[-8:]
+    #Ｆ列の６桁目から（全桁－９桁）の値をＨ列へ代入、個別に記述のある値はその値をＨ列へ代入
+    h_value = data[6:len(data)-9]
+    match h_value: 
+        case "GIGAZO" | "ｷﾞｶﾞｿﾞｳｱﾌﾟﾘ":
+            h_value = "ギガぞうWi-Fi"
+        case _ if h_value.startswith("MSFT") or h_value == "ﾏｲｸﾛｿﾌﾄ":
+            h_value = "Microsoft 365"
+    ws.cell(row=cell.row, column=8).value = h_value
+    #VデビットをVisaデビットに置換
+    ws.cell(row=cell.row, column=6).value = 'Visaデビット'
+
+def process_transaction_data(ws):
+    previous_month = (datetime.now().month - 1) % 12 or 12
+    yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+
+    for row in ws.iter_rows(min_row=2, min_col=6, max_col=6):
+        for cell in row:
+            process_transaction_cell(ws, cell, cell.value, previous_month)
+
+    for cell in ws['H']:
+        if cell.value is None or cell.value == '':
+            cell.fill = yellow_fill
+
+def open_loginpage(URL):
+    return webbrowser.open(URL)
+
+def main():
+    root = tk.Tk()
+    root.withdraw()
+    
+    if messagebox.askyesno("ダウンロード", "CSVファイルをダウンロードしていますか"):
+        file_path = filedialog.askopenfilename(
+            initialdir=os.path.join(os.path.expanduser("~"), 'Downloads'),
+            filetypes=[("CSV files", "*.csv")]
+        )
+        if file_path:
+            process_csv_file(file_path)
+            wb = load_workbook(TEMP_FILE)
+            ws = wb.active
+            format_excel_sheet(ws)
+            process_transaction_data(ws)
+            wb.save(TEMP_FILE)
+            print("処理が完了しました")
+        else:
+            print("CSVファイルの選択がキャンセルされました")
+    else:
+        URL = "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
+        root.after(1000, lambda: open_loginpage(URL))	#1000ms ブラウザを開く処理を遅延実行
+        root.mainloop()                                 #イベントループを明示的に開始
+    
+    root.destroy()
+
+if __name__ == "__main__":
+    main()
