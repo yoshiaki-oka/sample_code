@@ -12,9 +12,9 @@ import os
 TEMP_FILE = os.path.join(os.path.expanduser("~"), 'Downloads', 'paypay.xlsx')
 
 def preprocess_dataframe(df):
-    df = df.copy()  #SettingWithCopyWarning
+    df = df.copy()  # SettingWithCopyWarning
     columns = df.columns.tolist()
-    columns.insert(10, columns.pop(7))  #摘要
+    columns.insert(10, columns.pop(7))  # 摘要
     df = df[columns]
 
     df['日付'] = (df['操作日(年)'].astype(str) + '/' +
@@ -41,12 +41,12 @@ def format_excel_sheet(ws):
         cell.style = 'Normal'
         cell.alignment = Alignment(horizontal='center')
 
-    for col in ['A']:
+    for col in ['A', 'C', 'D', 'E']:
         for cell in ws[col]:
-            cell.number_format = 'yyyy/mm/dd'
-    for col in ['C', 'D', 'E']:
-        for cell in ws[col]:
-            cell.number_format = '#,##0'
+            if col == 'A':
+                cell.number_format = 'yyyy/mm/dd'
+            else:
+                cell.number_format = '#,##0'
 
     column_widths = {'A': 11, 'B': 11, 'C': 11, 'D': 11, 'E': 11, 'F': 20, 'G': 11, 'H': 20}
     for col, width in column_widths.items():
@@ -91,7 +91,7 @@ def process_vdebit_transaction(ws, cell, data):
     ws.cell(row=cell.row, column=6).value = 'Visaデビット'
 
 def process_transaction_data(ws):
-    previous_month = (datetime.now().month - 1) % 12 or 12
+    previous_month = (datetime.now().month - 1) % 12 or 12      # (1 - 1) = 0 % 12 or 12
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
 
     for row in ws.iter_rows(min_row=2, min_col=6, max_col=6):
