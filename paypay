@@ -4,6 +4,8 @@ from tkinter import filedialog, messagebox
 import webbrowser
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
+from openpyxl.cell import Cell
 from openpyxl.styles import Alignment, PatternFill
 from datetime import datetime
 import os
@@ -16,12 +18,10 @@ LOG_FILE = os.path.join(os.path.expanduser("~"), 'Downloads', 'log_paypay.txt')
 # Setup logging
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
 
-def preprocess_dataframe(df):
+def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
     データフレームを前処理する関数。
     摘要の列順を変更し、日時の列を結合。
-    Args:df (pd.DataFrame)
-    Returns:前処理されたデータフレーム (pandas.DataFrame)
     """
     df = df.copy()  # SettingWithCopyWarning
     columns = df.columns.tolist()
@@ -39,12 +39,8 @@ def preprocess_dataframe(df):
 
     return df
 
-def process_csv_file(file_path):
-    """
-    CSVファイルを処理し、前処理されたデータフレームを返す関数。
-    Args:file_path (str)
-    Returns:前処理されたデータフレーム (pandas.DataFrame)
-    """
+def process_csv_file(file_path: str) -> pd.DataFrame | None:
+    #CSVファイルを処理し、前処理されたデータフレームを返す関数。
     try:
         df = pd.read_csv(file_path, encoding='shift-jis')
         logging.info("CSVファイルを読み込みました")
@@ -66,12 +62,8 @@ def process_csv_file(file_path):
     
     return output_df
 
-def format_excel_sheet(ws):
-    """
-    Excelワークシートをフォーマットする関数。
-    Args:ws (worksheet)
-    Returns:None
-    """
+def format_excel_sheet(ws: Worksheet) -> None:
+    #Excelワークシートをフォーマットする関数。
     ws.insert_cols(7)
     ws['G1'] = '明細番号'
 
@@ -92,16 +84,10 @@ def format_excel_sheet(ws):
 
     ws.freeze_panes = 'A2'
 
-def process_transaction_cell(ws, cell, data, previous_month):
-    """
-    各取引のセルを処理する関数。
-    Args:ws (worksheet)
-        cell (cell)
-        data (str)
-        previous_month (int)
-    Returns:None
-    match python 3.10 以降
-    """
+def process_transaction_cell(ws: Worksheet, cell: Cell, data: str, previous_month: int) -> None:
+    #各取引のセルを処理する関数。
+
+    #match python 3.10 以降
     match data:
         case "ＰＡＹＰＡＹ":
             ws.cell(row=cell.row, column=8).value = "PayPay"
@@ -122,14 +108,9 @@ def process_transaction_cell(ws, cell, data, previous_month):
         case _ if data.startswith('Vデビット'):
             process_vdebit_transaction(ws, cell, data)
 
-def process_vdebit_transaction(ws, cell, data):
-    """
-    Vデビット取引を処理する関数。
-    Args:ws (worksheet)
-        cell (cell)
-        data (str)
-    Returns:None
-    """
+def process_vdebit_transaction(ws: Worksheet, cell: Cell, data: str) -> None:
+    #Vデビット取引を処理する関数。
+
     #Ｆ列の右から８桁をＧ列へ代入
     ws.cell(row=cell.row, column=7).value = data[-8:]
     #Ｆ列の６桁目から（全桁－９桁）の値をＨ列へ代入、個別に記述のある値はその値をＨ列へ代入
@@ -143,12 +124,10 @@ def process_vdebit_transaction(ws, cell, data):
     #VデビットをVisaデビットに置換
     ws.cell(row=cell.row, column=6).value = 'Visaデビット'
 
-def process_transaction_data(ws):
+def process_transaction_data(ws: Worksheet) -> None:
     """
     取引データを処理する関数。
     各行に対して取引処理を呼び出し、空白のメモを黄色で塗りつぶす。
-    Args:ws (Worksheet)
-    Returns:None
     """
     previous_month = (datetime.now().month - 1) % 12 or 12      # (1 - 1) = 0 % 12 or 12
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
@@ -161,12 +140,8 @@ def process_transaction_data(ws):
         if cell.value is None or cell.value == '':
             cell.fill = yellow_fill
 
-def open_loginpage(URL):
-    """
-    ログインページを開く関数。
-    Args:URL (str)
-    Returns:return (bool) 
-    """
+def open_loginpage(URL: str) -> bool:
+    #ログインページを開く関数。
     try:
         webbrowser.open(URL)
         logging.info(f"URL {URL} ブラウザでオープンしました")
