@@ -10,17 +10,27 @@ from openpyxl.styles import Alignment, PatternFill
 from datetime import datetime
 import os
 import logging
+from typing import Optional, Dict, Any
+import sys
 
 # Constants
 TEMP_FILE = os.path.join(os.path.expanduser("~"), 'Downloads', 'paypay.xlsx')
 LOG_FILE = os.path.join(os.path.expanduser("~"), 'Downloads', 'log_paypay.txt')
+LOGIN_URL = "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
+
+# Column widths for Excel
+COLUMN_WIDTHS: Dict[str, int] = {'A': 11, 'B': 11, 'C': 11, 'D': 11, 'E': 11, 'F': 20, 'G': 11, 'H': 20}
 
 # Setup logging
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
 
+def safe_file_path(file_path: str) -> str:
+    """ファイルパスを正規化し、絶対パスに変換する"""
+    return os.path.abspath(os.path.normpath(file_path))
+
 def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    データフレームを前処理する関数。
+    データフレームを前処理する関数
     摘要の列順を変更し、日時の列を結合。
     """
     df = df.copy()  # SettingWithCopyWarning
@@ -28,7 +38,7 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     columns.insert(10, columns.pop(7))
     df = df[columns]
 
-    df['日付'] = (
+    df['日付'] = pd.to_datetime(
         df['操作日(年)'].astype(str) + '/' +
         df['操作日(月)'].astype(str).str.zfill(2) + '/' +
         df['操作日(日)'].astype(str).str.zfill(2) + ' ' +
@@ -37,33 +47,40 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df['操作時刻(秒)'].astype(str).str.zfill(2)
     )
 
-    return df
+    return df[['日付', '取引順番号', 'お支払金額', 'お預り金額', '残高', '摘要', 'メモ']]
 
-def process_csv_file(file_path: str) -> pd.DataFrame | None:
-    #CSVファイルを処理し、前処理されたデータフレームを返す関数。
+def process_csv_file(file_path: str) -> Optional[pd.DataFrame]:
+    """CSVファイルを処理し、前処理されたデータフレームを返す関数"""
     try:
         df = pd.read_csv(file_path, encoding='shift-jis')
-        logging.info("CSVファイルを読み込みました")
-    except Exception as e:
+        logging.info(f"CSVファイルを読み込みました: {file_path}")
+    except pd.errors.EmptyDataError:
+        logging.error("CSVファイルが空です")
+        messagebox.showerror("エラー", "CSVファイルが空です")
+        return None
+    except (IOError, pd.errors.ParserError) as e:
         logging.error(f"CSVファイルの読み込み中にエラーが発生しました: {e}")
         messagebox.showerror("エラー", f"CSVファイルの読み込み中にエラーが発生しました: {e}")
         return None
     
-    df = preprocess_dataframe(df)
-    output_df = df[['日付', '取引順番号', 'お支払金額', 'お預り金額', '残高', '摘要', 'メモ']]
+    output_df = preprocess_dataframe(df)
     
     try:
         output_df.to_excel(TEMP_FILE, index=False, header=True)
-        logging.info("CSVファイルのデータをExcelファイルにエクスポートしました")
+        logging.info(f"CSVファイルのデータをExcelファイルにエクスポートしました: {TEMP_FILE}")
+    except PermissionError:
+        logging.error(f"Excelファイルへの書き込み権限がありません: {TEMP_FILE}")
+        messagebox.showerror("エラー", f"Excelファイルへの書き込み権限がありません: {TEMP_FILE}")
+        return None
     except Exception as e:
-        logging.error(f"CSVファイルのデータをExcelファイルにエクスポート中にエラーが発生しました: {e}")
-        messagebox.showerror("エラー", f"CSVファイルのデータをExcelファイルにエクスポート中にエラーが発生しました: {e}")
+        logging.error(f"Excelファイルへのエクスポート中にエラーが発生しました: {e}")
+        messagebox.showerror("エラー", f"Excelファイルへのエクスポート中にエラーが発生しました: {e}")
         return None
     
     return output_df
 
 def format_excel_sheet(ws: Worksheet) -> None:
-    #Excelワークシートをフォーマットする関数。
+    """Excelワークシートをフォーマットする関数"""
     ws.insert_cols(7)
     ws['G1'] = '明細番号'
 
@@ -78,16 +95,14 @@ def format_excel_sheet(ws: Worksheet) -> None:
             else:
                 cell.number_format = '#,##0'
 
-    column_widths = {'A': 11, 'B': 11, 'C': 11, 'D': 11, 'E': 11, 'F': 20, 'G': 11, 'H': 20}
-    for col, width in column_widths.items():
+    for col, width in COLUMN_WIDTHS.items():
         ws.column_dimensions[col].width = width
 
     ws.freeze_panes = 'A2'
 
 def process_transaction_cell(ws: Worksheet, cell: Cell, data: str, previous_month: int) -> None:
-    #各取引のセルを処理する関数。
-
-    #match python 3.10 以降
+    """各取引のセルを処理する関数"""
+    # match python 3.10 以降
     match data:
         case "ＰＡＹＰＡＹ":
             ws.cell(row=cell.row, column=8).value = "PayPay"
@@ -109,11 +124,10 @@ def process_transaction_cell(ws: Worksheet, cell: Cell, data: str, previous_mont
             process_vdebit_transaction(ws, cell, data)
 
 def process_vdebit_transaction(ws: Worksheet, cell: Cell, data: str) -> None:
-    #Vデビット取引を処理する関数。
-
-    #Ｆ列の右から８桁をＧ列へ代入
+    """Vデビット取引を処理する関数"""
+    # Ｆ列の右から８桁をＧ列へ代入
     ws.cell(row=cell.row, column=7).value = data[-8:]
-    #Ｆ列の６桁目から（全桁－９桁）の値をＨ列へ代入、個別に記述のある値はその値をＨ列へ代入
+    # Ｆ列の６桁目から（全桁－９桁）の値をＨ列へ代入、個別に記述のある値はその値をＨ列へ代入。
     h_value = data[6:len(data)-9]
     match h_value: 
         case "GIGAZO" | "ｷﾞｶﾞｿﾞｳｱﾌﾟﾘ":
@@ -121,16 +135,18 @@ def process_vdebit_transaction(ws: Worksheet, cell: Cell, data: str) -> None:
         case _ if h_value.startswith("MSFT") or h_value == "ﾏｲｸﾛｿﾌﾄ":
             h_value = "Microsoft 365"
     ws.cell(row=cell.row, column=8).value = h_value
-    #VデビットをVisaデビットに置換
+    # VデビットをVisaデビットに置換
     ws.cell(row=cell.row, column=6).value = 'Visaデビット'
 
-def process_transaction_data(ws: Worksheet) -> None:
+def process_transaction_data(ws: Worksheet) -> int:
     """
-    取引データを処理する関数。
+    取引データを処理する関数
     各行に対して取引処理を呼び出し、空白のメモを黄色で塗りつぶす。
+    黄色に塗りつぶされたセルの数を返す。
     """
-    previous_month = (datetime.now().month - 1) % 12 or 12      # (1 - 1) = 0 % 12 or 12
+    previous_month = (datetime.now().month - 1) % 12 or 12
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+    yellow_cell_count = 0
 
     for row in ws.iter_rows(min_row=2, min_col=6, max_col=6):
         for cell in row:
@@ -139,22 +155,25 @@ def process_transaction_data(ws: Worksheet) -> None:
     for cell in ws['H']:
         if cell.value is None or cell.value == '':
             cell.fill = yellow_fill
+            yellow_cell_count += 1
 
-def open_loginpage(URL: str) -> bool:
-    #ログインページを開く関数。
+    return yellow_cell_count
+
+def open_loginpage(url: str) -> bool:
+    """ウェブブラウザーでログインページを開く関数"""
     try:
-        webbrowser.open(URL)
-        logging.info(f"URL {URL} ブラウザでオープンしました")
+        webbrowser.open(url)
+        logging.info(f"ブラウザでURLを開きました: {url}")
         return True
     except Exception as e:
-        logging.error(f"URL {URL} ブラウザでオープン中にエラーが発生しました: {e}")
+        logging.error(f"ブラウザでURLを開く際にエラーが発生しました: {e}")
         return False
 
-def main():
+def main() -> None:
     """
     ユーザーにCSVファイルのダウンロード確認を行い、
     CSVファイルの選択・処理・Excelファイルの保存を行う。
-    ダウンロードしていない場合は、ログインページを開く。
+    ダウンロードしていないときは、ログインページを開く。
     """
     root = tk.Tk()
     root.withdraw()
@@ -165,27 +184,30 @@ def main():
             filetypes=[("CSV files", "*.csv")]
         )
         if file_path:
+            file_path = safe_file_path(file_path)
             output_df = process_csv_file(file_path)
             if output_df is not None:
                 wb = load_workbook(TEMP_FILE)
                 ws = wb.active
                 format_excel_sheet(ws)
-                process_transaction_data(ws)
+                yellow_cell_count = process_transaction_data(ws)
                 try:
                     wb.save(TEMP_FILE)
-                    logging.info(f"Excelファイル {TEMP_FILE} 保存しました")
-                    messagebox.showinfo("コンプリート", "処理が完了しました")
+                    logging.info(f"Excelファイルを保存しました: {TEMP_FILE}")
+                    messagebox.showinfo("処理完了", f"処理が完了しました\n\nメモ Ｈ列で黄色のセル: {yellow_cell_count}")
+                except PermissionError:
+                    logging.error(f"Excelファイルへの書き込み権限がありません: {TEMP_FILE}")
+                    messagebox.showerror("エラー", f"Excelファイルへの書き込み権限がありません: {TEMP_FILE}")
                 except Exception as e:
-                    logging.error(f"Excelファイル {TEMP_FILE} の保存中にエラーが発生しました: {e}")
-                    messagebox.showerror("エラー", f"Excelファイル {TEMP_FILE} の保存中にエラーが発生しました: {e}")
+                    logging.error(f"Excelファイルの保存中にエラーが発生しました: {e}")
+                    messagebox.showerror("エラー", f"Excelファイルの保存中にエラーが発生しました: {e}")
             else:
                 messagebox.showerror("エラー", "CSVファイルの処理中にエラーが発生しました")
         else:
             messagebox.showinfo("キャンセル", "CSVファイルの選択がキャンセルされました")
     else:
-        URL = "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
-        root.after(1000, lambda: open_loginpage(URL))   # 1000ms ブラウザを開く処理を遅延実行
-        root.mainloop()                                 # イベントループを明示的に開始
+        root.after(1000, lambda: open_loginpage(LOGIN_URL))     # 1000ms ブラウザを開く処理を遅延実行
+        root.mainloop()                                         # イベントループを明示的に開始
     
     root.destroy()
 
