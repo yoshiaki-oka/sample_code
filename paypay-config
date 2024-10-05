@@ -1,0 +1,58 @@
+
+# ファイルパス設定
+files:
+  temp_file: "{{USER_DOWNLOADS}}/paypay.xlsx"
+
+# URL設定
+urls:
+  login: "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
+
+# GUI メッセージ設定
+gui:
+  messages:
+    config_key_missing: "設定ファイルに 'files' または 'temp_file' キーが見つかりません。"
+    download_prompt: "CSVファイルをダウンロードしてください"
+    process_confirm: "CSVファイルをダウンロードした\n\n処理を開始しますか？"
+    csv_empty_error: "CSVファイルが空です: {}"
+    csv_parse_error: "CSVファイルの形式が正しくありません: {}"
+    permission_error: "ファイルへのアクセス権限がありません: {} または {}"
+    unexpected_error: "CSVファイルの処理中に予期せぬエラーが発生しました: {}"
+    excel_not_generated: "Excelファイルが生成されませんでした: {}"
+    excel_not_found: "Excelファイルが見つかりません: {}"
+    excel_permission_error: "Excelファイルへの書き込み権限がありません: {}"
+    excel_process_error: "Excelファイルの処理中にエラーが発生しました: {}"
+    process_complete: "処理が完了しました\n\nメモ Ｈ列 黄色のセル：{}"
+    csv_selection_cancel: "CSVファイルの選択がキャンセルされました"
+    download_cancel_confirm: "ダウンロードがキャンセルされました\n\n既存のCSVファイルで処理をしますか？"
+
+# タイミング設定
+timings:
+  browser_open_delay: 1000
+  download_check_delay: 10000
+  recheck_interval: 30000
+
+# Excel設定
+excel:
+  date_format: "yyyy/mm/dd"
+  number_format: "#,##0"
+  highlight_color: "FFFF00"
+  column_widths:
+    A: 11
+    B: 11
+    C: 11
+    D: 11
+    E: 11
+    F: 20
+    G: 11
+    H: 20
+
+# 取引ルール
+transaction_rules:
+  ＰＡＹＰＡＹ: "PayPay"
+  ＡＴＭ手数料: "ATM手数料"
+  振込手数料: "振込手数料"
+  ATM出金: "ATM出金"
+  ATM入金: "ATM入金"
+  利息: "利息"
+  給与振込: "給与振込"
+  ＡＰ（: "携帯電話代 {}月分"
