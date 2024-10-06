@@ -1,7 +1,8 @@
 
-import yaml
 import os
+import yaml
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from typing import Optional, Dict
 from datetime import datetime
 import webbrowser
@@ -13,21 +14,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.cell import Cell
 from openpyxl.styles import Alignment, PatternFill
 
-LOG_FILE = os.path.join(os.path.dirname(__file__), 'paypay.log')
-LOG_LEVEL = logging.INFO
-LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-LOG_ENCODING = 'utf-8'
-
-def setup_logging()-> None:
-    """ロギングの設定を行う関数"""
-    logging.basicConfig(
-        filename=LOG_FILE,
-        level=LOG_LEVEL,
-        format=LOG_FORMAT,
-        encoding=LOG_ENCODING
-    )
-
-def load_config()-> dict:
+def load_config() -> dict:
     """設定ファイル (config.yaml) を読み込み、プレースホルダ{{USER_DOWNLOADS}}をユーザーのダウンロードフォルダーのパスに置換する関数"""
     try:
         with open('config.yaml', 'r', encoding='utf-8') as config_file:
@@ -61,9 +48,33 @@ def load_config()-> dict:
         messagebox.showerror("エラー", error_msg)
         raise
 
-setup_logging()
+def setup_logging(config: dict) -> None:
+    """ロギングの設定を行う関数"""
+    log_config = config.get('logging', {})
+
+    LOG_FILE = os.path.join(os.path.dirname(__file__), log_config['file'])
+    LOG_LEVEL = getattr(logging, log_config['level'])
+    LOG_FORMAT = log_config['format']
+    LOG_ENCODING = log_config['encoding']
+
+    rotation_config = log_config.get('rotation', {})
+    handler = TimedRotatingFileHandler(
+        filename=LOG_FILE,
+        when=rotation_config['when'],
+        interval=rotation_config['interval'],
+        backupCount=rotation_config['backupCount'],
+        encoding=LOG_ENCODING
+    )
+
+    formatter = logging.Formatter(LOG_FORMAT)
+    handler.setFormatter(formatter)
+
+    logger = logging.getLogger()
+    logger.setLevel(LOG_LEVEL)
+    logger.addHandler(handler)
 
 config = load_config()
+setup_logging(config)
 
 def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
