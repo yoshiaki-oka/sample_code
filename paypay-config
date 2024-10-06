@@ -1,35 +1,18 @@
 
-# ファイルパス設定
+# ファイル設定
 files:
   temp_file: "{{USER_DOWNLOADS}}/paypay.xlsx"
 
-# URL設定
-urls:
-  login: "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
-
-# GUI メッセージ設定
-gui:
-  messages:
-    config_key_missing: "設定ファイルに 'files' または 'temp_file' キーが見つかりません。"
-    download_prompt: "CSVファイルをダウンロードしてください"
-    process_confirm: "CSVファイルをダウンロードした\n\n処理を開始しますか？"
-    csv_empty_error: "CSVファイルが空です: {}"
-    csv_parse_error: "CSVファイルの形式が正しくありません: {}"
-    permission_error: "ファイルへのアクセス権限がありません: {} または {}"
-    unexpected_error: "CSVファイルの処理中に予期せぬエラーが発生しました: {}"
-    excel_not_generated: "Excelファイルが生成されませんでした: {}"
-    excel_not_found: "Excelファイルが見つかりません: {}"
-    excel_permission_error: "Excelファイルへの書き込み権限がありません: {}"
-    excel_process_error: "Excelファイルの処理中にエラーが発生しました: {}"
-    process_complete: "処理が完了しました\n\nメモ Ｈ列 黄色のセル：{}"
-    csv_selection_cancel: "CSVファイルの選択がキャンセルされました"
-    download_cancel_confirm: "ダウンロードがキャンセルされました\n\n既存のCSVファイルで処理をしますか？"
-
-# タイミング設定
-timings:
-  browser_open_delay: 1000
-  download_check_delay: 10000
-  recheck_interval: 30000
+# ログ設定
+logging:
+  file: paypay.log
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  encoding: utf-8
+  rotation:
+    when: 'W5'        # 毎週土曜日にローテーション
+    interval: 1       # 1週間ごとでローテーション
+    backupCount: 8    # 過去8週間分のログ
 
 # Excel設定
 excel:
@@ -56,3 +39,31 @@ transaction_rules:
   利息: "利息"
   給与振込: "給与振込"
   ＡＰ（: "携帯電話代 {}月分"
+
+# URL設定
+urls:
+  login: "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
+
+# タイミング設定（ミリ秒）
+timings:
+  browser_open_delay: 1000
+  download_check_delay: 10000
+  recheck_interval: 30000
+
+# GUI メッセージ設定
+gui:
+  messages:
+    config_key_missing: "設定ファイルに 'files' または 'temp_file' キーが見つかりません。"
+    download_prompt: "CSVファイルをダウンロードしてください"
+    process_confirm: "CSVファイルをダウンロードした\n\n処理を開始しますか？"
+    csv_empty_error: "CSVファイルが空です: {}"
+    csv_parse_error: "CSVファイルの形式が正しくありません: {}"
+    permission_error: "ファイルへのアクセス権限がありません: {} または {}"
+    unexpected_error: "CSVファイルの処理中に予期せぬエラーが発生しました: {}"
+    excel_not_generated: "Excelファイルが生成されませんでした: {}"
+    excel_not_found: "Excelファイルが見つかりません: {}"
+    excel_permission_error: "Excelファイルへの書き込み権限がありません: {}"
+    excel_process_error: "Excelファイルの処理中にエラーが発生しました: {}"
+    process_complete: "処理が完了しました\n\nメモ Ｈ列 黄色のセル：{}"
+    csv_selection_cancel: "CSVファイルの選択がキャンセルされました"
+    download_cancel_confirm: "ダウンロードがキャンセルされました\n\n既存のCSVファイルで処理をしますか？"
