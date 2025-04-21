@@ -103,7 +103,7 @@ Private Sub Memo()
             Cells(i, 8) = "振込手数料"
         Case Cells(i, 6) Like "*[利息]*"
             Cells(i, 8) = "利息"
-        Case Cells(i, 6) = "ＰＡＹＰＡＹ"
+        Case Cells(i, 6) = "PayPay チャージ"
             Cells(i, 8) = "PayPay"
         Case Cells(i, 8) = ""
             Cells(i, 8).Interior.Color = vbYellow
