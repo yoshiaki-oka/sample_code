@@ -1,76 +1,94 @@
 
+Option Explicit
 Private Sub Workbook_Open()
-    Dim URL As String
-    If MsgBox("CSVファイルをすでにダウンロードしていますか", vbYesNo + vbQuestion, "ダウンロード") = vbYes Then
-        Call CSV
+    Dim Result As Long, URL As String
+    
+    Worksheets("Sheet1").Activate
+    Cells.Clear
+    
+    Result = MsgBox("CSVファイルをすでにダウンロードしていますか", vbYesNo + vbQuestion, "ダウンロード")
+    If Result = vbYes Then
+        Call CSV_File
     Else
-        URL = "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
+        URL = "https://www.google.co.jp/"
         CreateObject("Wscript.Shell").Run URL, 1
     End If
 End Sub
 
-
-Sub CSV()
-    Dim WSH As Object, FD As FileDialog, CSV_File As String
-    Dim cnt As Long, buf1 As Variant, buf2 As Variant, tmp As Variant
-    Dim i As Long
-    
-    Worksheets("After").Activate
-    Cells.Clear
-    
+Option Explicit
+Sub CSV_File()
+    Dim FD As FileDialog, CSV_File As String
     Set FD = Application.FileDialog(msoFileDialogFilePicker)
-    If FD.Show = False Then End
-    CSV_File = FD.SelectedItems(1)
-        
+        FD.InitialFileName = "C:\Users\name\Downloads\"
+        FD.Filters.Add "csvファイル", "*.csv"
+        If FD.Show = False Then Exit Sub
+        CSV_File = FD.SelectedItems(1)
+    Call Process_CSV(CSV_File)
+End Sub
+
+Sub Process_CSV(CSV_File As String) 
+    Dim cnt As Long, buf1 As Variant, buf2 As Variant, fields As Variant
     Open CSV_File For Input As #1
         Do Until EOF(1)
             Line Input #1, buf1
             cnt = cnt + 1
             buf2 = Replace(buf1, """", "")
+            fields = Split(buf2, ",")
 
-            'yyyy/m/d h:mm:ss
-            Cells(cnt, 1) = Split(buf2, ",")(0) & "/" & Split(buf2, ",")(1) & "/" & Split(buf2, ",")(2) & " " & _
-            Split(buf2, ",")(3) & ":" & Split(buf2, ",")(4) & ":" & Split(buf2, ",")(5)
+            'yyyy/mm/dd h:mm:ss
+            Cells(cnt, 1) = fields(0) & "/" & fields(1) & "/" & fields(2) & " " & _
+            fields(3) & ":" & fields(4) & ":" & fields(5)
 
-            '日付のみ表示
-            Cells(cnt, 1).NumberFormatLocal = "yyyy/m/d"
-            
-            Cells(cnt, 2) = Split(buf2, ",")(6)                     '取引順
-            Cells(cnt, 3) = Format(Split(buf2, ",")(8), "#,##0")    '出金
-            Cells(cnt, 4) = Format(Split(buf2, ",")(9), "#,##0")    '入金
-            Cells(cnt, 5) = Format(Split(buf2, ",")(10), "#,##0")   '残高
-            
-            Cells(cnt, 6) = Split(buf2, ",")(7)                     '摘要
-            tmp = Split(Cells(cnt, 6), "　")
-             If tmp(0) = "Vデビット" Or tmp(0) = "Visaデビットお支払い" Then
-                Cells(cnt, 6) = "Visaデビット"
-                Cells(cnt, 7) = tmp(UBound(tmp))
-                For i = 1 To UBound(tmp) - 1
-                    Cells(cnt, 8) = Cells(cnt, 8) + tmp(i)
-                Next i
-            End If
+            Cells(cnt, 2) = fields(6)     '取引順
+            Cells(cnt, 3) = fields(8)     '出金
+            Cells(cnt, 4) = fields(9)     '入金
+            Cells(cnt, 5) = fields(10)    '残高
+            Cells(cnt, 6) = fields(7)      '摘要
         Loop
     Close #1
+    Call ApplyFormatting
+End Sub
 
-    '１行目の処理
+Private Sub ApplyFormatting()
+    Dim i As Long
+    
     Range("A1") = "日付"
     Range("B1") = "取引順"
+    Range("C1") = "出金"
+    Range("D1") = "入金"
     Range("G1") = "明細番号"
     Range("H1") = "メモ"
     Range("A1:H1").HorizontalAlignment = xlCenter
-
-    '列幅の設定
+    
     Columns("A:E").ColumnWidth = 11
-    Columns("F:F").ColumnWidth = 20     '摘要
+    Columns("F:F").ColumnWidth = 20  '摘要
     Columns("G:G").ColumnWidth = 11
-    Columns("H:H").ColumnWidth = 20     'メモ
+    Columns("H:H").ColumnWidth = 20  'メモ
+    
+    For i = 2 To Cells(Rows.Count, 1).End(xlUp).Row
+        Cells(i, 1).NumberFormatLocal = "yyyy/mm/dd"
+        Cells(i, 3).NumberFormatLocal = "#,###"
+        Cells(i, 4).NumberFormatLocal = "#,###"
+        Cells(i, 5).NumberFormatLocal = "#,###"
+    Next i
+    Call Debit
+End Sub
+
+Private Sub Debit()
+    Dim i As Long, tmp As Variant
+    For i = 2 To Cells(Rows.Count, 1).End(xlUp).Row
+        If InStr(Cells(i, 6), "Vデビット") Then
+            tmp = Split(Cells(i, 6), "　")
+            Cells(i, 7) = tmp(2)
+            Cells(i, 8) = tmp(1)
+            Cells(i, 6) = "Visaデビット"
+        End If
+    Next i
     Call Memo
 End Sub
 
-
 Private Sub Memo()
     Dim i As Long
-    Worksheets("After").Activate
     For i = 2 To Cells(Rows.Count, 1).End(xlUp).Row
         Select Case True
         Case Cells(i, 6) Like "*[ＡＴＭ]" Or Cells(i, 6) Like "*[ATM]*" And Cells(i, 3) <> ""
