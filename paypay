@@ -1,287 +1,723 @@
 
 import os
-import yaml
+import sys
 import logging
 from logging.handlers import TimedRotatingFileHandler
-from typing import Optional, Dict
-from datetime import datetime
-import webbrowser
+import re
 import tkinter as tk
-from tkinter import filedialog, messagebox
-import pandas as pd
+from tkinter import messagebox, filedialog
+import webbrowser
+import chardet
 from openpyxl import load_workbook
+from openpyxl.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
-from openpyxl.cell import Cell
-from openpyxl.styles import Alignment, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+import pandas as pd
+from pandas.errors import EmptyDataError, ParserError
+from wcwidth import wcswidth
+import yaml
 
-def load_config() -> dict:
-    """設定ファイル (config.yaml) を読み込み、プレースホルダ{{USER_DOWNLOADS}}をユーザーのダウンロードフォルダーのパスに置換する関数"""
+logger = logging.getLogger(__name__)
+
+def init_logger(config: dict) -> None:
+    """
+    設定ファイルの内容に基づいてロガーを再設定します
+    Args:
+        config (dict): アプリケーション設定
+    """
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+
+    file_handler = TimedRotatingFileHandler(
+        filename=config['logging']['rotation']['filename'],
+        when=config['logging']['rotation']['when'],
+        interval=config['logging']['rotation']['interval'],
+        backupCount=config['logging']['rotation']['backupCount'],
+        encoding=config['logging']['rotation']['encoding']
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+    logging.getLogger(__name__).info("ロガーの再設定が完了しました。")
+
+def load_config(file_path: str) -> dict | None:
+    """
+    設定ファイル (config.yaml) を読み込む
+    Args:
+        file_path (str): 設定ファイルのパス
+    Returns:
+        dict | None: 読み込まれた設定辞書またはエラー時はNone
+    """
     try:
-        with open('config.yaml', 'r', encoding='utf-8') as config_file:
-            config = yaml.safe_load(config_file)
-        
-        downloads_path = os.path.join(os.path.expanduser("~"), 'Downloads')
-        
-        if 'paths' in config and 'downloads' in config['paths']:
-            config['paths']['downloads'] = config['paths']['downloads'].replace('{{USER_DOWNLOADS}}', downloads_path)
-        
-        if 'files' in config and 'temp_file' in config['files']:
-            config['files']['temp_file'] = config['files']['temp_file'].replace('{{USER_DOWNLOADS}}', downloads_path)
-        else:
-            logging.warning(config['gui']['messages']['config_key_missing'])
-            messagebox.showwarning("警告", config['gui']['messages']['config_key_missing'])
-        return config
-
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return yaml.safe_load(file)
     except FileNotFoundError:
-        error_msg = "設定ファイル (config.yaml) が見つかりません。"
-        logging.error(error_msg)
-        messagebox.showerror("エラー", error_msg)
-        raise
+        logger.error("設定ファイル 'config.yaml' が見つかりません。")
     except yaml.YAMLError as e:
-        error_msg = f"設定ファイルの解析中にエラーが発生しました: {e}"
-        logging.error(error_msg)
-        messagebox.showerror("エラー", error_msg)
-        raise
+        logger.error(f"設定ファイルの解析に失敗しました: {e}")
     except Exception as e:
-        error_msg = f"設定ファイルの読み込み中に予期せぬエラーが発生しました: {e}"
-        logging.error(error_msg)
-        messagebox.showerror("エラー", error_msg)
-        raise
+        logger.error(f"設定ファイルの読み込み中に予期せぬエラーが発生しました: {e}")
+    return None
 
-def setup_logging(config: dict) -> None:
-    """ロギングの設定を行う関数"""
-    log_config = config.get('logging', {})
-
-    LOG_FILE = os.path.join(os.path.dirname(__file__), log_config['file'])
-    LOG_LEVEL = getattr(logging, log_config['level'])
-    LOG_FORMAT = log_config['format']
-    LOG_ENCODING = log_config['encoding']
-
-    rotation_config = log_config.get('rotation', {})
-    handler = TimedRotatingFileHandler(
-        filename=LOG_FILE,
-        when=rotation_config['when'],
-        interval=rotation_config['interval'],
-        backupCount=rotation_config['backupCount'],
-        encoding=LOG_ENCODING
-    )
-
-    formatter = logging.Formatter(LOG_FORMAT)
-    handler.setFormatter(formatter)
-
-    logger = logging.getLogger()
-    logger.setLevel(LOG_LEVEL)
-    logger.addHandler(handler)
-
-config = load_config()
-setup_logging(config)
-
-def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def confirm_csv_downloaded(config: dict) -> bool:
     """
-    データフレームを前処理する関数
-    摘要の列順を変更し、日時の列を結合。
+    CSVファイルがすでにダウンロード済みかを確認する
+    Args:
+        config (dict): アプリケーション設定
+    Returns:
+        bool: True ダウンロード済、False 未ダウンロード
     """
-    df = df.copy()
-    columns = df.columns.tolist()
-    columns.insert(10, columns.pop(7))
-    df = df[columns]
-
-    df['日付'] = pd.to_datetime(
-        df['操作日(年)'].astype(str) + '/' +
-        df['操作日(月)'].astype(str).str.zfill(2) + '/' +
-        df['操作日(日)'].astype(str).str.zfill(2) + ' ' +
-        df['操作時刻(時)'].astype(str).str.zfill(2) + ':' +
-        df['操作時刻(分)'].astype(str).str.zfill(2) + ':' +
-        df['操作時刻(秒)'].astype(str).str.zfill(2)
-    )
-
-    return df[['日付', '取引順番号', 'お支払金額', 'お預り金額', '残高', '摘要', 'メモ']]
-
-def process_csv_file(csv_file_path: str, temp_file_path: str) -> Optional[pd.DataFrame]:
-    """CSVファイルを読み込み、処理し、Excelファイルとして出力する関数"""
+    logger.info("confirm_csv_downloaded() started")
     try:
-        df = pd.read_csv(csv_file_path, encoding='shift-jis')
-        logging.info(f"CSVファイルを読み込みました: {csv_file_path}")
-
-        output_df = preprocess_dataframe(df)
-
-        output_df.to_excel(temp_file_path, index=False, header=True)
-        logging.info(f"CSVデータをExcelファイルに出力しました: {temp_file_path}")
-
-    except pd.errors.EmptyDataError:
-        logging.error(config['gui']['messages']['csv_empty_error'].format(csv_file_path))
-        messagebox.showerror("エラー", config['gui']['messages']['csv_empty_error'].format(csv_file_path))
-    except pd.errors.ParserError:
-        logging.error(config['gui']['messages']['csv_parse_error'].format(csv_file_path))
-        messagebox.showerror("エラー", config['gui']['messages']['csv_parse_error'].format(csv_file_path))
-    except PermissionError:
-        logging.error(config['gui']['messages']['permission_error'].format(csv_file_path, temp_file_path))
-        messagebox.showerror("エラー", config['gui']['messages']['permission_error'].format(csv_file_path, temp_file_path))
+        msg_conf = config['messages']['confirm_download']
+        response = messagebox.askyesno(
+            title=msg_conf['title'],
+            message=msg_conf['message']
+        )
+        return response
     except Exception as e:
-        logging.error(config['gui']['messages']['unexpected_error'].format(e))
-        messagebox.showerror("エラー", config['gui']['messages']['unexpected_error'].format(e))
+        logger.exception(f"CSVダウンロード確認の際にエラーが発生しました: {e}")
+        return False
+    finally:
+        logger.info("confirm_csv_downloaded() finished")
+
+def open_web_page(config: dict) -> None:
+    """
+    ブラウザでウェブページを開き、CSVファイルのダウンロード後、処理を再開する。
+    Args:
+        config (dict): アプリケーション設定
+    """
+    logger.info("open_web_page() started")
+    try:
+        url = config['open_web_page']['url']
+        logger.info(f"ブラウザでURLを開きます: {url}")
+        webbrowser.open(url)
+        msg_info = config['messages']['download_complete']
+        messagebox.showinfo(
+            title=msg_info['title'],
+            message=msg_info['message']
+        )
+    except Exception as e:
+        logger.exception(f"ウェブページ表示中にエラーが発生しました: {e}")
+    finally:
+        logger.info("open_web_page() finished")
+
+def select_csv_file(config: dict) -> str | None:
+    """
+    ファイルダイアログを表示してCSVファイルを選択する
+    Args:
+        config (dict): アプリケーション設定
+    Returns:
+        str | None: 選択されたCSVファイルのパス。選択しなかった場合はNone
+    """
+    logger.info("select_csv_file() started")
+    try:
+        csv_conf = config['select_csv']
+        msg_sel = config['messages']['select_csv']
+
+        # filetypesを適切な形式に変換
+        filetypes = [(ft['name'], ft['pattern']) for ft in csv_conf['filetypes']]
+
+        csv_file = filedialog.askopenfilename(
+            title=msg_sel['title'],
+            initialdir=os.path.join(os.path.expanduser(csv_conf['default_dir'])),
+            filetypes=filetypes
+        )
+
+        if csv_file:
+            logger.info(f"選択されたCSVファイル: {csv_file}")
+            return csv_file
+        else:
+            logger.warning("CSVファイルが選択されませんでした。")
+            warning = msg_sel['warning']
+            messagebox.showwarning(warning['title'], warning['message'])
+            return None
+    except Exception as e:
+        logger.exception(f"ファイル選択中にエラーが発生しました: {e}")
+        return None
+    finally:
+        logger.info("select_csv_file() finished")
+
+def handle_csv_download(config: dict) -> str | None:
+    """
+    CSVファイルを取得する
+    Args:
+        config (dict): アプリケーション設定
+    Returns:
+        str | None: CSVファイルパス or None
+    """
+    logger.info("handle_csv_download() started")
+    try:
+        if not confirm_csv_downloaded(config):
+            open_web_page(config)
+        csv_file = select_csv_file(config)
+        return csv_file
+    except Exception as e:
+        logger.exception(f"CSVファイルのダウンロード確認中にエラーが発生しました: {e}")
+        return None
+    finally:
+        logger.info("handle_csv_download() finished")
+
+def detect_csv_encoding(csv_file: str, config: dict) -> str | None:
+    """
+    CSVファイルのエンコーディングを判定します
+    Args:
+        csv_file (str): CSVファイルのパス
+        config (dict): アプリケーション設定
+    Returns:
+        str: 判定されたエンコーディング
+        None: エラー発生時
+    """
+    try:
+        configured_encoding = config['csv_processing']['encoding']
+        read_size = config['csv_processing']['read_size']
+        
+        if configured_encoding.lower() == "shift-jis":
+            logger.info("CSVファイルのエンコーディングは 'shift-jis' です。")
+            return configured_encoding
+        else:
+            with open(csv_file, 'rb') as f:
+                raw_data = f.read(read_size)
+            detected = chardet.detect(raw_data)
+            encoding = detected.get("encoding", configured_encoding)
+            logger.info(f"判定されたエンコーディングは '{encoding}' です。")
+            return encoding
+    except Exception as e:
+        logger.exception(f"CSVファイルのエンコーディング判定中にエラーが発生しました: {e}")
+        return None
+
+def read_csv_file(csv_file: str, config: dict) -> pd.DataFrame | None:
+    """
+    CSVファイルをDataFrameとして読み込み
+    Args:
+        csv_file (str): CSVファイルのパス
+        config (dict): アプリケーション設定
+    Returns:
+        pd.DataFrame | None: CSVファイルの読み込みに成功した DataFrame または None
+    """
+    try:
+        encoding_to_use = detect_csv_encoding(csv_file, config)
+        if encoding_to_use is None:
+            logger.error("エンコーディングの判定に失敗しました。")
+            return None
+        df = pd.read_csv(
+            csv_file,
+            header=config['csv_processing']['header'],
+            encoding=encoding_to_use
+        )
+        logger.info("CSVファイルの読み込みに成功しました。")
+        return df
+    except Exception as e:
+        logger.exception(f"CSVファイルの読み込み中にエラーが発生しました: {e}")
+        return None
+
+def convert_dates(df: pd.DataFrame, config: dict) -> pd.DataFrame | None:
+    """
+    DataFrame内の日時情報を変換する
+    Args:
+        df (pd.DataFrame): 処理対象のDataFrame
+        config (dict): アプリケーション設定
+    Returns:
+        pd.DataFrame | None: 日時変換が成功した場合のDataFrame、エラー時はNone
+    """
+    try:
+        date_conf = config['date_processing']
+        source_cols = date_conf['source_columns']
+        template = date_conf['template']
+        date_format = date_conf['format']
+        preproc = date_conf['preprocessing']
+        output_col = date_conf['output_column']
+        
+        def preprocess_value(val, is_numeric=False):
+            """値を前処理する補助関数"""
+            val_str = str(val)
+            if preproc['strip_quotes']:
+                val_str = val_str.strip('"')
+            if is_numeric and preproc['zero_pad']:
+                val_str = val_str.zfill(2)
+            return val_str
+        
+        df[output_col] = df.apply(
+            lambda row: pd.to_datetime(
+                template.format(
+                    year=preprocess_value(row[source_cols['year']]),
+                    month=preprocess_value(row[source_cols['month']], True),
+                    day=preprocess_value(row[source_cols['day']], True),
+                    hour=preprocess_value(row[source_cols['hour']], True),
+                    minute=preprocess_value(row[source_cols['minute']], True),
+                    second=preprocess_value(row[source_cols['second']], True)
+                ),
+                format=date_format
+            ),
+            axis=1
+        )
+        
+        logger.info(f"日付カラム「{output_col}」の変換に成功しました")
+        return df
+        
+    except KeyError as e:
+        logger.error(f"設定または列が見つかりません: {e}")
+        return None
+    except ValueError as e:
+        logger.error(f"日付変換中に値のエラーが発生しました: {e}")
+        return None
+    except Exception as e:
+        logger.exception(f"日時変換中に予期せぬエラーが発生しました: {e}")
+        return None
+
+def complete_data(df: pd.DataFrame, config: dict) -> pd.DataFrame | None:
+    """
+    DataFrameを最終の形に整える
+    Args:
+        df (pd.DataFrame): 処理対象のDataFrame
+        config (dict): アプリケーション設定
+    Returns:
+        pd.DataFrame | None: データの処理が成功した場合のDataFrame、エラー時はNone
+    """
+    try:
+        df = df.copy()
+        
+        column_map = config['column_mapping']
+        
+        # ソース列から出力列への変換
+        for output_col, source_col in column_map['output_columns'].items():
+            # 特殊なケース：日付カラムが既に変換済みなら飛ばす
+            if output_col == column_map['date_column'] and output_col in df.columns:
+                continue
+            if source_col in df.columns:  # 元の列が存在する場合のみマッピング
+                df[output_col] = df[source_col]
+        
+        # ここで先に追加列の設定を行う
+        for new_col in column_map['additional_columns']:
+            col_name = new_col['name']
+            default_val = new_col['default']
+            df[col_name] = default_val
+        
+        # 最後に最終的な列順序に整形
+        # 存在する列だけを選択するよう安全策を追加
+        available_cols = [col for col in column_map['final_columns'] if col in df.columns]
+        df = df[available_cols]
+        
+        return df
+    except Exception as e:
+        logger.exception(f"データ処理中にエラーが発生しました: {e}")
+        return None
+
+def process_dataframe(df: pd.DataFrame, config: dict) -> pd.DataFrame | None:
+    """
+    DataFrame全体の処理を行う
+    Args:
+        df (pd.DataFrame): 処理対象のDataFrame
+        config (dict): アプリケーション設定
+    Returns:
+        pd.DataFrame | None: 処理が成功した場合のDataFrame、エラー時はNone
+    """
+    df = convert_dates(df, config)
+    if df is None:
+        return None
+
+    df = complete_data(df, config)
+    if df is None:
         return None
     
-    return output_df
+    return df
 
-def format_excel_sheet(ws: Worksheet) -> None:
-    """Excelワークシートをフォーマットする関数"""
-    ws.insert_cols(7)
-    ws['G1'] = '明細番号'
-
-    for cell in ws[1]:
-        cell.style = 'Normal'
-        cell.alignment = Alignment(horizontal='center')
-
-    for col in ['A', 'C', 'D', 'E']:
-        for cell in ws[col]:
-            if col == 'A':
-                cell.number_format = config['excel']['date_format']
-            else:
-                cell.number_format = config['excel']['number_format']
-
-    for col, width in config['excel']['column_widths'].items():
-        ws.column_dimensions[col].width = width
-
-    ws.freeze_panes = 'A2'
-
-def process_vdebit_transaction(ws: Worksheet, cell: Cell, data: str) -> None:
-    """Vデビット取引を処理する関数"""
-    # match python 3.10 以降
-    ws.cell(row=cell.row, column=7).value = data[-8:]
-    h_value = data[6:len(data)-9]
-    match h_value: 
-        case "GIGAZO" | "ｷﾞｶﾞｿﾞｳｱﾌﾟﾘ":
-            h_value = "ギガぞうWi-Fi"
-        case _ if h_value.startswith("MSFT") or h_value == "ﾏｲｸﾛｿﾌﾄ":
-            h_value = "Microsoft 365"
-    ws.cell(row=cell.row, column=8).value = h_value
-    ws.cell(row=cell.row, column=6).value = 'Visaデビット'
-
-def process_transaction_cell(ws: Worksheet, cell: Cell, data: str, previous_month: int) -> None:
-    """各取引のセルを処理する関数"""
-    match data:
-        case "ＰＡＹＰＡＹ" | "ＡＴＭ手数料" | "振込手数料" as transaction:
-            ws.cell(row=cell.row, column=8).value = config['transaction_rules'][transaction]
-        
-        case transaction if any(key in transaction for key in ["ATM出金", "ATM入金", "利息", "給与振込"]):
-            for key in ["ATM出金", "ATM入金", "利息", "給与振込"]:
-                if key in transaction:
-                    ws.cell(row=cell.row, column=8).value = config['transaction_rules'][key]
-                    break
-        
-        case transaction if transaction.startswith('ＡＰ（'):
-            ws.cell(row=cell.row, column=8).value = config['transaction_rules']['ＡＰ（'].format(previous_month)
-        
-        case transaction if transaction.startswith('Vデビット'):
-            process_vdebit_transaction(ws, cell, data)
-        
-        case _:
-            pass
-
-def process_transaction_data(ws: Worksheet) -> int:
+def csv_processing(csv_file: str, config: dict) -> pd.DataFrame | None:
     """
-    取引データを処理する関数
-    各行に対して取引処理を呼び出し、空白のメモを黄色で塗りつぶす。
-    黄色に塗りつぶされたセルの数を返す。
+    CSVファイルを読み込み、処理を施してDataFrameを返す。
+    Args:
+        csv_file (str): 読み込むCSVファイルのパス
+        config (dict): アプリケーション設定
+    Returns:
+        pd.DataFrame | None: 全処理が成功した場合の DataFrame、エラー時はNone
     """
-    yellow_fill = PatternFill(start_color=config['excel']['highlight_color'], end_color=config['excel']['highlight_color'], fill_type='solid')
-    yellow_cell_count = 0
-
-    first_transaction_date = ws['A2'].value
-    if first_transaction_date:
-        previous_month = (first_transaction_date.month - 1) % 12 or 12
-
-    for row in ws.iter_rows(min_row=2, min_col=6, max_col=6):
-        for cell in row:
-            process_transaction_cell(ws, cell, cell.value, previous_month)
-
-    for cell in ws['H']:
-        if cell.value is None or cell.value == '':
-            cell.fill = yellow_fill
-            yellow_cell_count += 1
-
-    return yellow_cell_count
-
-def handle_csv(root: tk.Tk) -> None:
-    """CSVファイルを処理する関数"""
-    temp_file_path = config['files']['temp_file']
-    initialdir = os.path.dirname(temp_file_path)
-    
-    csv_file_path = filedialog.askopenfilename(
-        initialdir=initialdir,
-        title="CSVファイルを選択",
-        filetypes=[("CSV files", "*.csv")]
-    )
-    
-    if csv_file_path:
-        output_df = process_csv_file(csv_file_path, temp_file_path)
-
-        if output_df is not None:
-            if not os.path.exists(temp_file_path):
-                logging.error(config['gui']['messages']['excel_not_generated'].format(temp_file_path))
-                messagebox.showerror("エラー", config['gui']['messages']['excel_not_generated'].format(temp_file_path))
-                return
-            
-            try:
-                wb = load_workbook(temp_file_path)
-                ws = wb.active
-                format_excel_sheet(ws)
-                yellow_cell_count = process_transaction_data(ws)
-                
-                wb.save(temp_file_path)
-                logging.info(f"Excelファイルを保存しました: {temp_file_path}")
-                
-                full_width = str(yellow_cell_count).translate(str.maketrans('0123456789', '０１２３４５６７８９'))
-                messagebox.showinfo("処理完了", config['gui']['messages']['process_complete'].format(full_width))
-                
-            except FileNotFoundError:
-                logging.error(config['gui']['messages']['excel_not_found'].format(temp_file_path))
-                messagebox.showerror("エラー", config['gui']['messages']['excel_not_found'].format(temp_file_path))
-            except PermissionError:
-                logging.error(config['gui']['messages']['excel_permission_error'].format(temp_file_path))
-                messagebox.showerror("エラー", config['gui']['messages']['excel_permission_error'].format(temp_file_path))
-            except Exception as e:
-                logging.error(config['gui']['messages']['excel_process_error'].format(e))
-                messagebox.showerror("エラー", config['gui']['messages']['excel_process_error'].format(e))
-
-    else:
-        messagebox.showinfo("キャンセル", config['gui']['messages']['csv_selection_cancel'])
-
-    if root:
-        root.update()
-
-def open_loginpage(url: str) -> None:
-    """ウェブブラウザーでログインページを開く関数"""
     try:
-        webbrowser.open(url)
-        logging.info(f"ブラウザでURLを開きました: {url}")
-    except Exception as e:
-        logging.error(f"ブラウザでURLを開く際にエラーが発生しました: {e}")
+        logger.info("csv_processing() started")
+        logger.info(f"読み込み対象のCSVファイル: {csv_file}")
 
-def confirm_csv_download_and_start(root: tk.Tk) -> None:
-    """CSVファイルのダウンロード・処理の開始を確認し、処理を開始する関数"""
-    if messagebox.askyesno("確認", config['gui']['messages']['process_confirm']):
-        handle_csv(root)
-    else:
-        root.after(config['timings']['recheck_interval'], lambda: confirm_csv_download_and_start(root))
+        df = read_csv_file(csv_file, config)
+        if df is None:
+            return None
+
+        df = process_dataframe(df, config)
+        logger.info("csv_processing() finished")
+        return df
+    except Exception as e:
+        logger.exception(f"CSV処理中にエラーが発生しました: {e}")
+        return None
+
+def get_previous_month(date_value) -> int:
+    """
+    指定の日付情報から、1ケ月前の月を計算して返す
+    計算式: (date_value.month - 1) % 12 or 12
+    ・2～12月の場合: 前月（1～11）を返す。
+    ・1月の場合: (1 - 1) % 12 は 0で、0 は false と評価されるので、12 を返す。
+    Returns:
+        int: 1ケ月前の月（1～12）
+    """
+    return (date_value.month - 1) % 12 or 12
+
+def process_memo(ws: Worksheet, config: dict) -> None:
+    """
+    メモを設定する
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("process_memo() started")
+    try:
+        min_row = config['excel_formatting']['data_row_start']
+        memo_conditions = config['memo_conditions']
+
+        for row in ws.iter_rows(min_row=min_row, max_row=ws.max_row):
+            description = row[config['column_indices']['description']].value
+            memo_cell = row[config['column_indices']['memo']]
+            memo_text = ''
+
+            if description in memo_conditions['exact_match']:
+                memo_text = memo_conditions['exact_match'][description]
+            elif any(keyword in description for keyword, value in memo_conditions['contains'].items()):
+                memo_text = next(
+                    value for keyword, value in memo_conditions['contains'].items()
+                    if keyword in description
+                )
+            elif description and any(description.startswith(start) for start in memo_conditions['starts_with']):
+                date_value = row[config['column_indices']['date']].value
+                previous_month = get_previous_month(date_value)
+                target_key = next(
+                    start for start in memo_conditions['starts_with']
+                    if description.startswith(start)
+                )
+                memo_text = memo_conditions['starts_with'][target_key].format(month=previous_month)
+            else:
+                memo_text = memo_conditions['default']
+
+            memo_cell.value = memo_text
+    except Exception:
+        logger.exception("メモの設定中にエラーが発生しました。")
+    finally:
+        logger.info("process_memo() finished")
+
+def get_visa_debit_memo(target_text: str, visa_conditions: list) -> str:
+    """
+    target_text の値が list にある値の場合は対応する memo を返し、
+    ない場合は target_text を返す。
+    Args:
+        target_text (str): Visaデビットの対象テキスト
+        visa_conditions (list): 条件設定のリスト
+    Returns:
+        str: 返すべき memo の値
+    """
+    for condition in visa_conditions:
+        ctype = condition.get('type')
+        cmatch = condition.get('match')
+        cmemo = condition.get('memo')
+        if ctype == 'exact' and target_text == cmatch:
+            return cmemo
+        elif ctype == 'starts_with' and target_text.startswith(cmatch):
+            return cmemo
+    return target_text
+
+def process_visa_debit(ws: Worksheet, config: dict) -> None:
+    """
+    Visaデビットの処理
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("process_visa_debit() started")
+    try:
+        min_row = config['excel_formatting']['data_row_start']
+        prefix = config['visa_debit']['prefix']
+        delimiter = config['visa_debit']['delimiter']
+        max_parts = config['visa_debit']['max_parts']
+        default_description = config['visa_debit']['default_description']
+        visa_conditions = config['visa_debit']['memo_conditions']
+
+        for row in ws.iter_rows(min_row=min_row, values_only=False):
+            description_cell = row[config['column_indices']['description']]
+            detail_cell = row[config['column_indices']['detail_number']]
+            memo_cell = row[config['column_indices']['memo']]
+
+            description = description_cell.value
+            if description and description.startswith(prefix):
+                tmp = description.split(delimiter)
+                if len(tmp) >= max_parts:
+                    detail_cell.value = tmp[2]
+                    memo_cell.value = get_visa_debit_memo(tmp[1], visa_conditions)
+                    description_cell.value = default_description
+                else:
+                    logger.warning("Visaデビットの文字列の形式が違う")
+    except Exception:
+        logger.exception("Visaデビットの処理中にエラーが発生しました。")
+    finally:
+        logger.info("process_visa_debit() finished")
+
+def format_header(ws: Worksheet, config: dict) -> None:
+    """
+    ヘッダー行の書式（スタイル・アライメント・freeze_panes）を設定する
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("format_header() started")
+    header_row = config['excel_formatting']['header_row']
+    header_style = config['excel_formatting']['header_style']
+    style_name = header_style['style']
+    alignment_option = header_style['alignment']
+
+    for cell in ws[header_row]:
+        cell.style = style_name
+        cell.alignment = Alignment(horizontal=alignment_option)
+
+    ws.freeze_panes = config['excel_formatting']['freeze_panes']
+    logger.info("format_header() finished")
+
+def apply_font(ws: Worksheet, config: dict) -> None:
+    """
+    ワークシート全体のセルに対して、指定されたフォントを適用する
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("apply_font() started")
+    font_config = config['excel_formatting']['font']
+    font = Font(name=font_config['name'], size=font_config['size'])
+
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.font = font
+    logger.info("apply_font() finished")
+
+def set_fixed_columns(ws: Worksheet, config: dict) -> None:
+    """
+    設定ファイルで指定された固定の列幅や数値フォーマットを設定する
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("set_fixed_columns() started")
+    header_row = config['excel_formatting']['header_row']
+    column_settings = config['excel_formatting']['column_settings']
+    for col, settings in column_settings.items():
+        if settings:
+            ws.column_dimensions[col].width = settings.get('width', 0)
+            number_fmt = settings.get('number_format')
+            if number_fmt:
+                for cell in ws[col][header_row:]:
+                    cell.number_format = number_fmt
+    logger.info("set_fixed_columns() finished")
+
+def strip_right_spaces(ws: Worksheet, config: dict) -> None:
+    """ 
+    指定された列のセルの右側の空白を正規表現で削除する
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("strip_right_spaces() started")
+    try:
+        min_row = config['excel_formatting']['data_row_start']
+        col_index = config['column_indices']['description'] + 1
+        pattern_str = config['strip_pattern']
+        pattern = re.compile(pattern_str) 
+        for row in ws.iter_rows(
+            min_row=min_row,
+            max_row=ws.max_row,
+            min_col=col_index,
+            max_col=col_index
+        ):
+            for cell in row:
+                if cell.value and isinstance(cell.value, str):
+                    cell.value = pattern.sub('', cell.value)
+    except Exception:
+        logger.exception("セルの右側の空白を削除中にエラーが発生しました。")
+    finally:
+        logger.info("strip_right_spaces() finished")
+
+def calculate_column_width(ws: Worksheet, column: str, config: dict) -> float:
+    """
+    指定された列の幅（余白を含む）を計算する
+    各セルの表示幅は wcwidth() で求め、もし wcwidth() が -1 を返した場合は、
+    そのセルに特殊文字が含まれていると判断し、len() を使用して幅を計測。
+    Args:
+        ws (Worksheet): 対象のワークシート
+        column (str): 対象の列名（"F", "H"）
+        config (dict): アプリケーション設定
+    Returns:
+        float: 計算された列幅（最大の表示幅に余白を加算した値）
+    """
+    min_row = config['excel_formatting']['data_row_start']
+    max_length = 0
+    for row in ws.iter_rows(min_row=min_row, 
+                            max_row=ws.max_row, 
+                            min_col=ws[column][0].column, 
+                            max_col=ws[column][0].column):
+        for cell in row:
+            if cell.value is not None:
+                cell_value = str(cell.value)
+                effective_length = wcswidth(cell_value)
+                if effective_length < 0:
+                    logger.warning(f"セル '{cell_value}' に特殊文字があるため、len() で幅計算。")
+                    effective_length = len(cell_value)
+                max_length = max(max_length, effective_length)
+
+    padding = config['excel_formatting']['column_padding']
+    calculated_width = max_length + padding
+
+    min_width = config['excel_formatting']['min_width']
+    if calculated_width < min_width:
+        calculated_width = min_width
+    
+    return calculated_width
+
+def auto_adjust_columns(ws: Worksheet, config: dict) -> None:
+    """
+    自動調整対象の列の幅を、def calculate_column_width を用いて設定する
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("auto_adjust_columns() started")
+    columns_to_adjust = config['excel_formatting']['auto_adjust_columns']
+    for col in columns_to_adjust:
+        column_width = calculate_column_width(ws, col, config)
+        ws.column_dimensions[col].width = column_width
+        logger.debug(f"列 {col} の幅を {column_width} に設定しました。")
+    logger.info("auto_adjust_columns() finished")
+
+def excel_formatting(wb: Workbook, ws: Worksheet, config: dict) -> None:
+    """
+    Excel ファイルの書式設定の処理をまとめる
+    Args:
+        wb (Workbook): ワークブックオブジェクト
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    """
+    logger.info("excel_formatting() started")
+    try:
+        format_header(ws, config)
+        apply_font(ws, config)
+        set_fixed_columns(ws, config)
+        strip_right_spaces(ws, config)
+        auto_adjust_columns(ws, config)
+    except Exception as e:
+        logger.exception("Excel の書式設定中にエラーが発生しました。")
+    finally:
+        logger.info("excel_formatting() finished")
+
+def highlight_empty_memo(ws: Worksheet, config: dict) -> str:
+    """
+    メモ列が空の場合、指定色でセルを塗りつぶします
+    Args:
+        ws (Worksheet): 対象のワークシート
+        config (dict): アプリケーション設定
+    Returns:
+        str: ハイライトしたセルの数、または "なし"/"エラー"
+    """
+    logger.info("highlight_empty_memo() started")
+    color_fill_config = config['highlight_empty_memo']['color_fill']
+    color_fill = PatternFill(
+        start_color=color_fill_config['start_color'],
+        end_color=color_fill_config['end_color'],
+        fill_type=color_fill_config['fill_type']
+    )
+    highlight_count = 0
+    try:
+        memo_idx = config['column_indices']['memo']
+        memo_col_letter = get_column_letter(memo_idx + 1)
+        header_row = config['excel_formatting']['header_row']
+
+        for cell in ws[memo_col_letter][header_row:]:
+            if not cell.value:
+                cell.fill = color_fill
+                highlight_count += 1
+
+        count_result = config['results']['no_highlights'] if highlight_count == 0 else f"{highlight_count}"
+        return count_result
+    except Exception as e:
+        logger.exception(f"メモハイライト中にエラーが発生しました: {e}")
+        return config['results']['error_result']
+    finally:
+        logger.info("highlight_empty_memo() finished")
 
 def main() -> None:
-    """メイン関数"""
-    root = tk.Tk()
-    root.withdraw()
+    """メイン処理関数"""
+    logger.info("main() started")
+    try:
+        config = load_config('config.yaml')
+        if config is None:
+            logger.error("設定ファイルの読み込みに失敗したため、処理を終了します。")
+            sys.exit(1)
+        
+        init_logger(config)
+        
+        from config_validator import validate_config
+        if not validate_config(config):
+            logger.error("設定ファイルにエラーがあります。スクリプトを終了します。")
+            sys.exit(1)
 
-    if messagebox.askokcancel("ダウンロード", config['gui']['messages']['download_prompt']): 
-        root.after(config['timings']['browser_open_delay'], lambda: open_loginpage(config['urls']['login']))
-        root.after(config['timings']['download_check_delay'], lambda: confirm_csv_download_and_start(root))
-    else:
-        response = messagebox.askyesno("確認", config['gui']['messages']['download_cancel_confirm'])
-        if response:
-            handle_csv(root)
-        else:
-            root.destroy()
+        root = tk.Tk()
+        root.withdraw()
 
-    root.mainloop()
+        csv_file = handle_csv_download(config)
+        if csv_file is None:
+            logger.warning("CSVファイルの取得に失敗したため、処理を終了します。")
+            return
 
-if __name__ == "__main__":
+        data = csv_processing(csv_file, config)
+        if data is None:
+            logger.warning("CSVファイルの処理に失敗したため、処理を終了します。")
+            return
+
+        output_file = os.path.join(
+            os.path.expanduser(config['main']['output_dir']),
+            config['main']['output_file']
+        )
+
+        data.to_excel(
+            output_file,
+            index=config['main']['excel_export']['index'],
+            sheet_name=config['main']['excel_export']['sheet_name'],
+            header=config['main']['excel_export']['header']
+        )
+        logger.info(f"Excelファイルを書き出しました: {output_file}")
+
+        wb = load_workbook(output_file)
+        ws = wb.active
+
+        process_memo(ws, config)
+        process_visa_debit(ws, config)
+        excel_formatting(wb, ws, config)
+        count_result = highlight_empty_memo(ws, config)
+
+        wb.save(output_file)
+        logger.info("Excelファイルを保存しました。")
+
+        msg_proc = config['messages']['process_complete']
+        full_message = msg_proc['message'].format(
+            column=msg_proc['column'],
+            color=msg_proc['color'],
+            count=count_result
+        )
+        messagebox.showinfo(msg_proc['title'], full_message)
+
+    except Exception as e:
+        logger.exception("メイン処理中に予期せぬエラーが発生しました。")
+    finally:
+        logger.info("main() finished")
+
+if __name__ == '__main__':
     main()
