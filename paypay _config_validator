@@ -1,0 +1,181 @@
+
+import logging
+from typing import Any, Dict, List, Union
+
+logger = logging.getLogger(__name__)
+
+# 設定ファイルの構造定義（必要なキーとその型）
+
+REQUIRED_KEYS = {
+    "logging": {"rotation": {"filename": str, "when": str, "interval": int, "backupCount": int, "encoding": str}},
+    "column_indices": {"date": int, "description": int, "detail_number": int, "memo": int},
+    "open_web_page": {"url": str},
+    "select_csv": {
+        "default_dir": str,
+        "filetypes": list
+    },
+    "csv_processing": {
+        "header": int,
+        "encoding": str,
+        "read_size": int,
+        },
+    "date_processing": {
+        "source_columns": {
+            "year": str,
+            "month": str,
+            "day": str,
+            "hour": str,
+            "minute": str,
+            "second": str
+        },
+        "template": str,
+        "format": str,
+        "preprocessing": {
+            "strip_quotes": bool,
+            "zero_pad": bool
+        },
+        "output_column": str
+    },
+    "column_mapping": {
+        "output_columns": dict,
+        "date_column": str,
+        "final_columns": list,
+        "additional_columns": list
+    },
+    "memo_conditions": {
+        "exact_match": dict,
+        "contains": dict,
+        "starts_with": dict,
+        "default": str
+    },
+    "visa_debit": {"prefix": str, "delimiter": str, "max_parts": int,"default_description": str, "memo_conditions": list},
+    "excel_formatting": {
+        "header_row": int,
+        "data_row_start": int,
+        "header_style": {"style": str, "alignment": str},
+        "freeze_panes": str,
+        "font": {"name": str, "size": int},
+        "column_settings": dict,
+        "auto_adjust_columns": list,
+        "column_padding": int,
+        "min_width": int
+    },
+    "strip_pattern": str,
+    "highlight_empty_memo": {"color_fill": {"start_color": str, "end_color": str, "fill_type": str}},
+    "results":{"no_highlights": str, "error_result": str},
+    "main": {
+        "excel_export": {"index": bool, "sheet_name": str, "header": bool},
+        "output_dir": str,
+        "output_file": str
+    },
+    "messages": {
+        "confirm_download": {"title": str, "message": str},
+        "download_complete": {"title": str, "message": str},
+        "select_csv": {"title": str, "warning": {"title": str, "message": str}},
+        "process_complete": {"title": str, "message": str, "column": str, "color": str}
+    }
+}
+
+
+def validate_config(config: dict) -> bool:
+    """
+    設定ファイルを検証する
+    Args:
+        config (dict): 検証する設定辞書
+    Returns:
+        bool: 検証結果（True: 成功, False: 失敗）
+    """
+    logger.info("validate_config() started")
+    
+    try:
+        # 再帰的な検証関数
+        def validate_recursive(config_part: dict, required_part: dict) -> bool:
+            """
+            設定の一部を再帰的に検証する
+            Args:
+                config_part (dict): 検証する設定の一部
+                required_part (dict): 必須キーと型の定義
+            Returns:
+                bool: 検証結果（True: 成功, False: 失敗）
+            """
+            for key, value_type in required_part.items():
+                if key not in config_part:
+                    logger.error(f"必須キーが不足: {key}")
+                    return False
+                # ネストされた辞書なら再帰呼出し
+                if isinstance(value_type, dict):
+                    if not validate_recursive(config_part[key], value_type):
+                        return False
+                # 型チェック
+                elif not isinstance(config_part[key], value_type):
+                    logger.error(f"キー '{key}' の型が不正です。期待: {value_type.__name__}, 実際: {type(config_part[key]).__name__}")
+                    return False
+            return True
+        
+        # 全体の構造を検証
+        if not validate_recursive(config, REQUIRED_KEYS):
+            logger.error("設定ファイルの基本構造に誤りがあります。")
+            return False
+        
+        if not isinstance(config["select_csv"]["default_dir"], str):
+            logger.error("select_csv -> default_dir は文字列でなければなりません")
+            return False
+        
+        # filetypes の詳細検証（各要素は辞書形式で "name" と "pattern" キーを持つこと）
+        filetypes = config["select_csv"]["filetypes"]
+        if not isinstance(filetypes, list):
+            logger.error("select_csv -> filetypes はリストでなければなりません")
+            return False
+        
+        for idx, ft in enumerate(filetypes):
+            if not isinstance(ft, dict):
+                logger.error(f"select_csv -> filetypes[{idx}] は辞書形式である必要があります")
+                return False
+            
+            required_ft_keys = {"name", "pattern"}
+            if not all(key in ft for key in required_ft_keys):
+                logger.error(f"select_csv -> filetypes[{idx}] に必須キー {required_ft_keys} が不足しています")
+                return False
+            
+            if not all(isinstance(ft[key], str) for key in required_ft_keys):
+                logger.error(f"select_csv -> filetypes[{idx}] の 'name' および 'pattern' は文字列でなければなりません")
+                return False
+        
+        if config["csv_processing"]["read_size"] <= 0:
+            logger.error("csv_processing.read_size は正の整数でなければなりません。")
+            return False
+        
+        if "header_row" in config["excel_formatting"]:
+            if not isinstance(config["excel_formatting"]["header_row"], int):
+                logger.error("excel_formatting -> header_row は整数でなければなりません")
+                return False
+        
+        if "data_row_start" in config["excel_formatting"]:
+            if not isinstance(config["excel_formatting"]["data_row_start"], int):
+                logger.error("excel_formatting -> data_row_start は整数でなければなりません")
+                return False
+        
+        # ヘッダー行とデータ開始行の関係性検証
+        if ("header_row" in config["excel_formatting"] and 
+            "data_row_start" in config["excel_formatting"]):
+            header_row = config["excel_formatting"]["header_row"]
+            data_row_start = config["excel_formatting"]["data_row_start"]
+            
+            if header_row >= data_row_start:
+                logger.error("excel_formatting -> header_row はdata_row_startより小さい値でなければなりません")
+                return False
+        
+        if "column_padding" in config["excel_formatting"]:
+            if not isinstance(config["excel_formatting"]["column_padding"], int):
+                logger.error("excel_formatting -> column_padding は整数でなければなりません")
+                return False
+        
+        logger.info("設定ファイルの検証に成功しました。")
+        return True
+    
+    except Exception as e:
+        logger.exception(f"設定ファイル検証エラー: {e}")
+        return False
+    
+    finally:
+        logger.info("validate_config() finished")
