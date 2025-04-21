@@ -69,7 +69,9 @@ column_mapping:
 
 memo_conditions:
   exact_match:
-    'ＰＡＹＰＡＹ': 'PayPay'
+    'PayPay チャージ': 'PayPay' # 2025/4/19から
+    'ＰＡＹＰＡＹ': 'PayPay' # 2024/3から
+    'ペイペイ': 'PayPay' # 2023/1から（口座からチャージ）
     '振込 ＰＡＹＰＡＹ': '戻入'
     'ＡＴＭ手数料': 'ATM手数料'
     '振込手数料': '振込手数料'
