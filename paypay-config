@@ -1,69 +1,183 @@
 
-# ファイル設定
-files:
-  temp_file: "{{USER_DOWNLOADS}}/paypay.xlsx"
-
-# ログ設定
+# config.yaml
 logging:
-  file: paypay.log
-  level: INFO
-  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-  encoding: utf-8
   rotation:
-    when: 'W5'        # 毎週土曜日にローテーション
-    interval: 1       # 1週間ごとでローテーション
-    backupCount: 8    # 過去8週間分のログ
+    filename: "paypay.log"
+    when: "W6"        # 週1回、土曜日に実行
+    interval: 1
+    backupCount: 4    # 4世代保持
+    encoding: "utf-8"
 
-# Excel設定
-excel:
-  date_format: "yyyy/mm/dd"
-  number_format: "#,##0"
-  highlight_color: "FFFF00"
-  column_widths:
-    A: 11
-    B: 11
-    C: 11
-    D: 11
-    E: 11
-    F: 20
-    G: 11
-    H: 20
+column_indices:
+  date: 0
+  description: 5
+  detail_number: 6
+  memo: 7
 
-# 取引ルール
-transaction_rules:
-  ＰＡＹＰＡＹ: "PayPay"
-  ＡＴＭ手数料: "ATM手数料"
-  振込手数料: "振込手数料"
-  ATM出金: "ATM出金"
-  ATM入金: "ATM入金"
-  利息: "利息"
-  給与振込: "給与振込"
-  ＡＰ（: "携帯電話代 {}月分"
+open_web_page:
+  url: "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
 
-# URL設定
-urls:
-  login: "https://login.paypay-bank.co.jp/wctx/1D1DFxFDg.do"
+select_csv:
+  default_dir: "~/Downloads"
+  filetypes:
+    - name: "CSVファイル"
+      pattern: "*.csv"
 
-# タイミング設定（ミリ秒）
-timings:
-  browser_open_delay: 1000
-  download_check_delay: 10000
-  recheck_interval: 30000
+csv_processing:
+  header: 0
+  encoding: "shift-jis"
+  read_size: 10240      # 1024*10(KB)
 
-# GUI メッセージ設定
-gui:
-  messages:
-    config_key_missing: "設定ファイルに 'files' または 'temp_file' キーが見つかりません。"
-    download_prompt: "CSVファイルをダウンロードしてください"
-    process_confirm: "CSVファイルをダウンロードした\n\n処理を開始しますか？"
-    csv_empty_error: "CSVファイルが空です: {}"
-    csv_parse_error: "CSVファイルの形式が正しくありません: {}"
-    permission_error: "ファイルへのアクセス権限がありません: {} または {}"
-    unexpected_error: "CSVファイルの処理中に予期せぬエラーが発生しました: {}"
-    excel_not_generated: "Excelファイルが生成されませんでした: {}"
-    excel_not_found: "Excelファイルが見つかりません: {}"
-    excel_permission_error: "Excelファイルへの書き込み権限がありません: {}"
-    excel_process_error: "Excelファイルの処理中にエラーが発生しました: {}"
-    process_complete: "処理が完了しました\n\nメモ Ｈ列 黄色のセル：{}"
-    csv_selection_cancel: "CSVファイルの選択がキャンセルされました"
-    download_cancel_confirm: "ダウンロードがキャンセルされました\n\n既存のCSVファイルで処理をしますか？"
+date_processing:
+  source_columns:
+    year: "操作日(年)"
+    month: "操作日(月)"
+    day: "操作日(日)"
+    hour: "操作時刻(時)"
+    minute: "操作時刻(分)"
+    second: "操作時刻(秒)"
+  template: "{year}/{month}/{day} {hour}:{minute}:{second}"    # "{year}/{month}/{day} {hour}:{minute}:{second}"
+  format: "%Y/%m/%d %H:%M:%S"                                  # "%Y/%m/%d %H:%M:%S"
+  preprocessing:
+    strip_quotes: true
+    zero_pad: true
+  output_column: "日付"
+
+column_mapping:
+  output_columns:
+    "日付": "日付"        # date_processingで生成される列
+    "取引順": "取引順番号"
+    "出金": "お支払金額"
+    "入金": "お預り金額"
+    "残高": "残高"
+    "摘要": "摘要"
+  date_column: "日付"   # 日付列名（特別扱い用）
+  final_columns:
+    - "日付"
+    - "取引順"
+    - "出金"
+    - "入金"
+    - "残高"
+    - "摘要"
+    - "明細番号"
+    - "メモ"
+  additional_columns:
+    - name: "明細番号"
+      default: ""
+    - name: "メモ"
+      default: ""
+
+memo_conditions:
+  exact_match:
+    'ＰＡＹＰＡＹ': 'PayPay'
+    '振込 ＰＡＹＰＡＹ': '戻入'
+    'ＡＴＭ手数料': 'ATM手数料'
+    '振込手数料': '振込手数料'
+  contains:
+    'ATM出金': 'ATM出金'
+    'ATM入金': 'ATM入金'
+    '利息': '利息'
+    '給与振込': '給与振込'
+  starts_with:
+    'ＡＰ（': '携帯電話代 {month}月分'
+  default: ''
+
+visa_debit:
+  prefix: "Vデビット"
+  delimiter: "　"
+  max_parts: 3
+  default_description: "Visaデビット"
+  memo_conditions:
+    - type: "exact"
+      match: "GAMMA.APP"
+      memo: "Gamma"
+    - type: "exact"
+      match: "GENSPARK.AI"
+      memo: "Genspark"
+    - type: "exact"
+      match: "GIGAZO"
+      memo: "ギガぞうWi-Fi"
+    - type: "exact"
+      match: "ｷﾞｶﾞｿﾞｳｱﾌﾟﾘ"
+      memo: "ギガぞうWi-Fi"
+    - type: "exact"
+      match: "ﾏｲｸﾛｿﾌﾄ"
+      memo: "Microsoft 365"
+    - type: "starts_with"
+      match: "Microsoft-"
+      memo: "Microsoft 365"
+
+excel_formatting:
+  header_row: 1
+  data_row_start: 2
+  header_style:
+    style: "Normal"
+    alignment: "center"
+  freeze_panes: "A2"
+  font:
+    name: "ＭＳ Ｐ明朝"
+    size: 11
+  column_settings:
+    A:
+      width: 11
+      number_format: "yyyy/mm/dd"
+    B:
+      width: 11
+    C:
+      width: 11
+      number_format: "#,##0"
+    D:
+      width: 11
+      number_format: "#,##0"
+    E:
+      width: 11
+      number_format: "#,##0"
+    F:
+      width: 0
+    G:
+      width: 11
+    H:
+      width: 0
+  auto_adjust_columns:
+    - 'F'
+    - 'H'
+  column_padding: 1
+  min_width: 11
+
+strip_pattern: "[\\s　]+$"
+
+highlight_empty_memo:
+  color_fill:
+    start_color: "FFFF00"
+    end_color: "FFFF00"
+    fill_type: "solid"
+
+results:
+  no_highlights: "なし"
+  error_result: "エラー"
+
+main:
+  excel_export:
+    index: False
+    sheet_name: "Sheet1"
+    header: True
+  output_dir: "~/Downloads"
+  output_file: "paypay.xlsx"
+
+messages:
+  confirm_download:
+    title: "ダウンロード"
+    message: "CSVファイルをすでにダウンロードしていますか？"
+  download_complete:
+    title: "確認"
+    message: "CSVファイルのダウンロードが完了したので、処理を再開します。"
+  select_csv:
+    title: "CSVファイルを選択してください"
+    warning:
+      title: "警告"
+      message: "CSVファイルが選択されませんでした。"
+  process_complete:
+    title: "処理完了"
+    message: "処理が完了しました\n\nメモ{column}列で{color}色のセル：{count}"
+    column: "Ｈ"    # 全角大文字
+    color: "黄"
